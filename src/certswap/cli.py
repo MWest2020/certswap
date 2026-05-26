@@ -3,6 +3,7 @@ from __future__ import annotations
 import typer
 
 from certswap import __version__
+from certswap.commands.inspect import inspect_command
 
 app = typer.Typer(
     name="certswap",
@@ -30,6 +31,9 @@ def _root(
     ),
 ) -> None:
     """Deterministic TLS bundle swap CLI."""
+
+
+app.command(name="inspect")(inspect_command)
 
 
 def main() -> None:
