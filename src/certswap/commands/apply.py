@@ -9,6 +9,7 @@ import typer
 
 from certswap.commands.common import (
     build_local_options,
+    build_ssh_options,
     confirm_or_exit,
     load_bundle,
     render_apply,
@@ -107,5 +108,79 @@ def apply_local(
             )
         )
 
+    if result.exit_code != 0:
+        raise typer.Exit(code=result.exit_code)
+
+
+@apply_app.command(name="ssh")
+def apply_ssh(
+    bundle: Annotated[Path, typer.Argument(exists=True, readable=True)],
+    host: Annotated[str, typer.Option("--host", help="ssh host or ~/.ssh/config alias")],
+    cert_dest: Annotated[str | None, typer.Option("--cert-dest")] = None,
+    key_dest: Annotated[str | None, typer.Option("--key-dest")] = None,
+    chain_dest: Annotated[str | None, typer.Option("--chain-dest")] = None,
+    combined_dest: Annotated[str | None, typer.Option("--combined-dest")] = None,
+    mode_cert: Annotated[int, typer.Option("--mode-cert")] = 0o644,
+    mode_key: Annotated[int, typer.Option("--mode-key")] = 0o600,
+    owner: Annotated[str | None, typer.Option("--owner")] = None,
+    group: Annotated[str | None, typer.Option("--group")] = None,
+    reload_cmd: Annotated[str | None, typer.Option("--reload")] = None,
+    pre_check_cmd: Annotated[str | None, typer.Option("--pre-check")] = None,
+    post_check_cmd: Annotated[str | None, typer.Option("--post-check")] = None,
+    password_env: Annotated[str | None, typer.Option("--password-env")] = None,
+    password_stdin: Annotated[bool, typer.Option("--password-stdin")] = False,
+    key: Annotated[Path | None, typer.Option("--key", exists=True, readable=True)] = None,
+    chain: Annotated[Path | None, typer.Option("--chain", exists=True, readable=True)] = None,
+    yes: Annotated[bool, typer.Option("--yes", "-y")] = False,
+    json_out: Annotated[bool, typer.Option("--json")] = False,
+    evidence_dir: Annotated[Path | None, typer.Option("--evidence-dir")] = None,
+) -> None:
+    """Apply the bundle to a remote host via ssh + scp."""
+    password = resolve_password(password_env, password_stdin)
+    cb = load_bundle(bundle, password=password, key=key, chain=chain)
+    options = build_ssh_options(
+        host=host,
+        cert_dest=cert_dest,
+        key_dest=key_dest,
+        chain_dest=chain_dest,
+        combined_dest=combined_dest,
+        mode_cert=mode_cert,
+        mode_key=mode_key,
+        owner=owner,
+        group=group,
+        reload_cmd=reload_cmd,
+        pre_check_cmd=pre_check_cmd,
+        post_check_cmd=post_check_cmd,
+    )
+    ident = cert_dest or combined_dest or key_dest or host
+    ctx = TargetContext(driver="ssh", identifier=f"{host}:{ident}", options=options)
+    driver = get_driver("ssh")
+
+    plan = driver.plan(cb, ctx)
+    if plan.is_blocked:
+        render_plan(plan, json_out=json_out)
+        raise typer.Exit(code=10)
+    if not json_out:
+        render_plan(plan, json_out=False)
+    confirm_or_exit(f"Apply to {host}?", yes=yes, json_out=json_out)
+
+    result = driver.apply(cb, ctx)
+    render_apply(result, json_out=json_out)
+
+    record = build_record(cb, ctx, result)
+    written = write_evidence(record, evidence_dir or default_evidence_root())
+    if not json_out:
+        typer.echo(f"evidence: {written}")
+    if result.exit_code == 0:
+        state_append(
+            StateEntry(
+                timestamp=record.timestamp_utc,
+                target=ctx.driver,
+                identifier=ctx.identifier,
+                fingerprint=cb.fingerprint_sha256(),
+                not_after=cb.not_after(),
+                evidence_dir=str(written),
+            )
+        )
     if result.exit_code != 0:
         raise typer.Exit(code=result.exit_code)

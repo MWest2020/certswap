@@ -5,7 +5,7 @@ Importing this package registers every built-in driver as a side effect.
 
 from __future__ import annotations
 
-from certswap.drivers import local  # noqa: F401 -- import-for-side-effects
+from certswap.drivers import local, ssh  # noqa: F401 -- import-for-side-effects
 from certswap.drivers.base import (
     ApplyResult,
     CheckResult,
