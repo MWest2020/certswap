@@ -179,6 +179,16 @@ def plan_k8s(
             help="Continue even when an Ingress host has no matching SAN",
         ),
     ] = False,
+    argocd_app: Annotated[
+        str | None,
+        typer.Option("--argocd-app", help="ArgoCD Application name to coordinate with"),
+    ] = None,
+    argocd_namespace: Annotated[
+        str, typer.Option("--argocd-namespace", help="Namespace where the Application lives")
+    ] = "argocd",
+    argocd_wait_seconds: Annotated[
+        float, typer.Option("--argocd-wait", help="Seconds to wait before verify (apply only)")
+    ] = 60.0,
     password_env: Annotated[str | None, typer.Option("--password-env")] = None,
     password_stdin: Annotated[bool, typer.Option("--password-stdin")] = False,
     key: Annotated[Path | None, typer.Option("--key", exists=True, readable=True)] = None,
@@ -197,6 +207,9 @@ def plan_k8s(
         ingress=ingress,
         keep_cert_manager=keep_cert_manager,
         allow_host_mismatch=allow_host_mismatch,
+        argocd_app=argocd_app,
+        argocd_namespace=argocd_namespace,
+        argocd_wait_seconds=argocd_wait_seconds,
     )
     ctx = TargetContext(
         driver="k8s",

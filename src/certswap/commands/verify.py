@@ -80,6 +80,8 @@ def verify_k8s(
     context: Annotated[str | None, typer.Option("--context")] = None,
     ingress: Annotated[str | None, typer.Option("--ingress")] = None,
     keep_cert_manager: Annotated[bool, typer.Option("--keep-cert-manager")] = False,
+    argocd_app: Annotated[str | None, typer.Option("--argocd-app")] = None,
+    argocd_namespace: Annotated[str, typer.Option("--argocd-namespace")] = "argocd",
     json_out: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
     """Verify a kubernetes.io/tls Secret (and optionally an Ingress's lack of
@@ -92,6 +94,8 @@ def verify_k8s(
         ingress=ingress,
         keep_cert_manager=keep_cert_manager,
         allow_host_mismatch=False,
+        argocd_app=argocd_app,
+        argocd_namespace=argocd_namespace,
     )
     ctx = TargetContext(
         driver="k8s",

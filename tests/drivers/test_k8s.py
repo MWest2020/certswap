@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from certswap.drivers._k8s_client import (
+    ArgoApplicationView,
     CertificateView,
     IngressView,
     K8sClient,
@@ -24,6 +25,7 @@ class FakeK8s(K8sClient):
     secrets: dict[tuple[str, str], SecretView] = field(default_factory=dict)
     ingresses: dict[tuple[str, str], IngressView] = field(default_factory=dict)
     certificates: dict[tuple[str, str], CertificateView] = field(default_factory=dict)
+    argo_apps: dict[tuple[str, str], ArgoApplicationView] = field(default_factory=dict)
     # Records of mutations:
     deleted_secrets: list[tuple[str, str]] = field(default_factory=list)
     created_secrets: list[tuple[str, str, bytes, bytes]] = field(default_factory=list)
@@ -94,6 +96,63 @@ class FakeK8s(K8sClient):
         for key in list(self.certificates):
             if key[0] == namespace and self.certificates[key].name == name:
                 self.certificates.pop(key)
+
+    # ArgoCD ---------------------------------------------------------------
+
+    argo_disabled: list[tuple[str, str]] = field(default_factory=list)
+    argo_respected: list[tuple[str, str, str, str | None]] = field(default_factory=list)
+    argo_reenabled: list[tuple[str, str]] = field(default_factory=list)
+
+    def get_argo_application(
+        self, namespace: str, name: str
+    ) -> ArgoApplicationView | None:
+        return self.argo_apps.get((namespace, name))
+
+    def disable_argo_automated_sync(self, namespace: str, name: str) -> None:
+        self.argo_disabled.append((namespace, name))
+        existing = self.argo_apps.get((namespace, name))
+        if existing is not None:
+            self.argo_apps[(namespace, name)] = ArgoApplicationView(
+                name=existing.name,
+                namespace=existing.namespace,
+                automated_sync=False,
+                self_heal=False,
+                sync_options=existing.sync_options,
+                ignore_differences_count=existing.ignore_differences_count,
+            )
+
+    def re_enable_argo_sync_no_selfheal(self, namespace: str, name: str) -> None:
+        self.argo_reenabled.append((namespace, name))
+        existing = self.argo_apps.get((namespace, name))
+        if existing is not None:
+            self.argo_apps[(namespace, name)] = ArgoApplicationView(
+                name=existing.name,
+                namespace=existing.namespace,
+                automated_sync=True,
+                self_heal=False,
+                sync_options=existing.sync_options,
+                ignore_differences_count=existing.ignore_differences_count,
+            )
+
+    def set_argo_respect_ignore_differences(
+        self,
+        namespace: str,
+        name: str,
+        target_secret: str,
+        target_ingress: str | None,
+    ) -> None:
+        self.argo_respected.append((namespace, name, target_secret, target_ingress))
+        existing = self.argo_apps.get((namespace, name))
+        if existing is not None:
+            opts = (*existing.sync_options, "RespectIgnoreDifferences=true")
+            self.argo_apps[(namespace, name)] = ArgoApplicationView(
+                name=existing.name,
+                namespace=existing.namespace,
+                automated_sync=existing.automated_sync,
+                self_heal=existing.self_heal,
+                sync_options=opts,
+                ignore_differences_count=existing.ignore_differences_count + 1,
+            )
 
 
 def _ctx(**opts: Any) -> TargetContext:
@@ -255,3 +314,104 @@ def k8s_driver_factory() -> tuple[FakeK8s, K8sDriver]:
     fake = FakeK8s()
     driver = K8sDriver(client_factory=lambda _c: fake)
     return fake, driver
+
+
+# -------- ArgoCD layer tests (M4b) --------
+
+
+def _argo_app(automated: bool = True, self_heal: bool = True) -> ArgoApplicationView:
+    return ArgoApplicationView(
+        name="my-app",
+        namespace="argocd",
+        automated_sync=automated,
+        self_heal=self_heal,
+        sync_options=(),
+        ignore_differences_count=0,
+    )
+
+
+def test_argo_plan_blocks_when_application_missing(pem_bundle: Path) -> None:
+    fake = FakeK8s()
+    driver = K8sDriver(client_factory=lambda _c: fake)
+    cb = parse_pem(pem_bundle)
+    plan = driver.plan(cb, _ctx(argocd_app="missing"))
+    assert plan.is_blocked
+    assert any("argocd Application" in b for b in plan.blockers)
+
+
+def test_argo_plan_reports_pre_and_post_steps(pem_bundle: Path) -> None:
+    fake = FakeK8s()
+    fake.argo_apps[("argocd", "my-app")] = _argo_app()
+    driver = K8sDriver(client_factory=lambda _c: fake)
+    cb = parse_pem(pem_bundle)
+    plan = driver.plan(cb, _ctx(argocd_app="my-app"))
+    descs = [s.description for s in plan.steps]
+    assert any("disable automated sync" in d for d in descs)
+    assert any("re-enable automated sync" in d for d in descs)
+
+
+def test_argo_apply_orders_disable_then_changes_then_reenable(pem_bundle: Path) -> None:
+    fake = FakeK8s()
+    fake.argo_apps[("argocd", "my-app")] = _argo_app()
+    fake.ingresses[("homelab", "app")] = IngressView(
+        name="app",
+        namespace="homelab",
+        hosts=["test.certswap.example"],
+        cert_manager_annotation="le",
+    )
+    driver = K8sDriver(client_factory=lambda _c: fake)
+    cb = parse_pem(pem_bundle)
+    fake.next_created_fingerprint = cb.fingerprint_sha256()
+
+    result = driver.apply(
+        cb,
+        _ctx(argocd_app="my-app", ingress="app", argocd_wait_seconds=0),
+    )
+    assert result.exit_code == 0, result.model_dump()
+    # Argo disable must come BEFORE the ingress strip
+    descs = [s.description for s in result.steps]
+    disable_idx = next(i for i, d in enumerate(descs) if "disable automated sync" in d)
+    strip_idx = next(i for i, d in enumerate(descs) if "strip ingress annotation" in d)
+    create_idx = next(i for i, d in enumerate(descs) if "create secret" in d)
+    reenable_idx = next(i for i, d in enumerate(descs) if "re-enable automated sync" in d)
+    assert disable_idx < strip_idx < create_idx < reenable_idx
+    assert fake.argo_disabled == [("argocd", "my-app")]
+    assert len(fake.argo_respected) == 1
+    assert fake.argo_respected[0][2] == "tls-cert"  # target_secret
+    assert fake.argo_respected[0][3] == "app"  # target_ingress
+    assert fake.argo_reenabled == [("argocd", "my-app")]
+
+
+def test_argo_apply_skips_wait_when_zero(pem_bundle: Path) -> None:
+    fake = FakeK8s()
+    fake.argo_apps[("argocd", "my-app")] = _argo_app()
+    driver = K8sDriver(client_factory=lambda _c: fake)
+    cb = parse_pem(pem_bundle)
+    fake.next_created_fingerprint = cb.fingerprint_sha256()
+    # Setting argocd_wait_seconds=0 must short-circuit the time.sleep call;
+    # if it didn't, this test would still pass but in 60s instead of <1s.
+    import time
+
+    started = time.perf_counter()
+    result = driver.apply(
+        cb, _ctx(argocd_app="my-app", argocd_wait_seconds=0)
+    )
+    elapsed = time.perf_counter() - started
+    assert result.exit_code == 0
+    assert elapsed < 5.0
+
+
+def test_argo_verify_fails_if_selfheal_back_on(pem_bundle: Path) -> None:
+    fake = FakeK8s()
+    fake.argo_apps[("argocd", "my-app")] = _argo_app(self_heal=True)
+    fake.secrets[("homelab", "tls-cert")] = SecretView(
+        name="tls-cert",
+        namespace="homelab",
+        type="kubernetes.io/tls",
+        fingerprint_sha256=None,
+    )
+    driver = K8sDriver(client_factory=lambda _c: fake)
+    result = driver.verify(_ctx(argocd_app="my-app"))
+    assert result.ok is False
+    bad = [c for c in result.checks if not c.ok]
+    assert any("selfHeal=false" in c.name for c in bad)

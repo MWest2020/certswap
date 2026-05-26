@@ -14,7 +14,13 @@ import time
 from collections.abc import Callable
 
 from certswap.core.validation import san_matches_host
-from certswap.drivers._k8s_client import ClusterContextMismatch, K8sClient, load, verify_context
+from certswap.drivers._k8s_client import (
+    ArgoApplicationView,
+    ClusterContextMismatch,
+    K8sClient,
+    load,
+    verify_context,
+)
 from certswap.drivers._k8s_options import K8sOptions
 from certswap.drivers.base import (
     ApplyResult,
@@ -104,6 +110,30 @@ class K8sDriver:
                         would_do="remove cert-manager.io/cluster-issuer annotation",
                     ),
                 )
+
+        if opts.argocd_app:
+            argo = client.get_argo_application(opts.argocd_namespace, opts.argocd_app)
+            if argo is None:
+                plan.blockers.append(
+                    f"argocd Application {opts.argocd_namespace}/{opts.argocd_app} not found"
+                )
+                return plan
+            plan.steps.insert(
+                0,
+                PlanStep(
+                    description=f"argocd: disable automated sync + selfHeal on {argo.name}",
+                    before=_describe_argo(argo),
+                    would_do="patch Application: automated=null, "
+                    "RespectIgnoreDifferences=true, ignoreDifferences+={secret,ingress}",
+                ),
+            )
+            plan.steps.append(
+                PlanStep(
+                    description=f"argocd: re-enable automated sync (selfHeal=false) on {argo.name}",
+                    before=None,
+                    would_do="patch Application: automated.{prune=true, selfHeal=false}",
+                )
+            )
         return plan
 
     def apply(self, bundle: CertBundle, ctx: TargetContext) -> ApplyResult:
@@ -112,6 +142,28 @@ class K8sDriver:
         client = self._factory(opts.context)
         if opts.context:
             verify_context(client, opts.context)
+
+        # Argo pre-step: silence the reconciler before we touch anything it
+        # owns. Otherwise selfHeal will re-apply the cert-manager
+        # Certificate / Ingress annotation milliseconds after we wipe them.
+        if opts.argocd_app:
+            _step(
+                result,
+                f"argocd: disable automated sync on {opts.argocd_app}",
+                lambda: client.disable_argo_automated_sync(
+                    opts.argocd_namespace, opts.argocd_app  # type: ignore[arg-type]
+                ),
+            )
+            _step(
+                result,
+                f"argocd: set RespectIgnoreDifferences on {opts.argocd_app}",
+                lambda: client.set_argo_respect_ignore_differences(
+                    opts.argocd_namespace,
+                    opts.argocd_app,  # type: ignore[arg-type]
+                    target_secret=opts.secret,
+                    target_ingress=opts.ingress,
+                ),
+            )
 
         if opts.ingress and not opts.keep_cert_manager:
             _step(
@@ -143,6 +195,20 @@ class K8sDriver:
                 opts.namespace, opts.secret, bundle.to_pem_fullchain(), bundle.to_pem_key()
             ),
         )
+
+        # Argo post-step: re-enable automated sync but keep selfHeal off —
+        # selfHeal ignores ignoreDifferences entirely, so leaving it true
+        # would void everything we just did.
+        if opts.argocd_app:
+            _step(
+                result,
+                f"argocd: re-enable automated sync (selfHeal=false) on {opts.argocd_app}",
+                lambda: client.re_enable_argo_sync_no_selfheal(
+                    opts.argocd_namespace, opts.argocd_app  # type: ignore[arg-type]
+                ),
+            )
+            if opts.argocd_wait_seconds > 0:
+                time.sleep(opts.argocd_wait_seconds)
 
         if any(not s.ok for s in result.steps):
             result.exit_code = 50
@@ -205,6 +271,31 @@ class K8sDriver:
                     )
                 )
                 all_ok = all_ok and annot_ok
+
+        # Also confirm cert-manager has not re-created the Certificate.
+        if not opts.keep_cert_manager:
+            cert = client.find_certificate_for_secret(opts.namespace, opts.secret)
+            cert_gone = cert is None
+            checks.append(
+                CheckResult(
+                    name="cert-manager Certificate not re-created",
+                    ok=cert_gone,
+                    detail=None if cert_gone else f"Certificate back: {cert.name if cert else ''}",
+                )
+            )
+            all_ok = all_ok and cert_gone
+
+        if opts.argocd_app:
+            argo = client.get_argo_application(opts.argocd_namespace, opts.argocd_app)
+            argo_ok = argo is not None and not argo.self_heal
+            checks.append(
+                CheckResult(
+                    name=f"argocd {opts.argocd_app} has selfHeal=false",
+                    ok=argo_ok,
+                    detail=None if argo_ok else "selfHeal back on or Application gone",
+                )
+            )
+            all_ok = all_ok and argo_ok
         return VerifyResult(ok=all_ok, checks=checks)
 
 
@@ -212,6 +303,14 @@ def _describe_secret(secret: object) -> str | None:
     if secret is None:
         return None
     return f"type={getattr(secret, 'type', '?')} fp={getattr(secret, 'fingerprint_sha256', '?')}"
+
+
+def _describe_argo(app: ArgoApplicationView) -> str:
+    return (
+        f"automated={app.automated_sync} selfHeal={app.self_heal} "
+        f"syncOptions={list(app.sync_options)} "
+        f"ignoreDifferences[{app.ignore_differences_count}]"
+    )
 
 
 def _step(result: ApplyResult, description: str, action: Callable[[], object]) -> None:

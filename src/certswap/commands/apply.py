@@ -196,6 +196,9 @@ def apply_k8s(
     ingress: Annotated[str | None, typer.Option("--ingress")] = None,
     keep_cert_manager: Annotated[bool, typer.Option("--keep-cert-manager")] = False,
     allow_host_mismatch: Annotated[bool, typer.Option("--allow-host-mismatch")] = False,
+    argocd_app: Annotated[str | None, typer.Option("--argocd-app")] = None,
+    argocd_namespace: Annotated[str, typer.Option("--argocd-namespace")] = "argocd",
+    argocd_wait_seconds: Annotated[float, typer.Option("--argocd-wait")] = 60.0,
     password_env: Annotated[str | None, typer.Option("--password-env")] = None,
     password_stdin: Annotated[bool, typer.Option("--password-stdin")] = False,
     key: Annotated[Path | None, typer.Option("--key", exists=True, readable=True)] = None,
@@ -214,6 +217,9 @@ def apply_k8s(
         ingress=ingress,
         keep_cert_manager=keep_cert_manager,
         allow_host_mismatch=allow_host_mismatch,
+        argocd_app=argocd_app,
+        argocd_namespace=argocd_namespace,
+        argocd_wait_seconds=argocd_wait_seconds,
     )
     ctx = TargetContext(
         driver="k8s",

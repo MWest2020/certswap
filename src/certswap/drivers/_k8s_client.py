@@ -35,6 +35,18 @@ class CertificateView:
     issuer_ref: str | None  # cluster-issuer / issuer name
 
 
+@dataclass(frozen=True)
+class ArgoApplicationView:
+    """An argoproj.io/v1alpha1 Application as observed."""
+
+    name: str
+    namespace: str
+    automated_sync: bool
+    self_heal: bool
+    sync_options: tuple[str, ...]
+    ignore_differences_count: int
+
+
 class K8sClient(Protocol):
     def current_context(self) -> str: ...
 
@@ -57,6 +69,22 @@ class K8sClient(Protocol):
     ) -> CertificateView | None: ...
 
     def delete_certificate(self, namespace: str, name: str) -> None: ...
+
+    def get_argo_application(
+        self, namespace: str, name: str
+    ) -> ArgoApplicationView | None: ...
+
+    def disable_argo_automated_sync(self, namespace: str, name: str) -> None: ...
+
+    def re_enable_argo_sync_no_selfheal(self, namespace: str, name: str) -> None: ...
+
+    def set_argo_respect_ignore_differences(
+        self,
+        namespace: str,
+        name: str,
+        target_secret: str,
+        target_ingress: str | None,
+    ) -> None: ...
 
 
 def load(context: str | None = None) -> K8sClient:
@@ -83,6 +111,7 @@ def verify_context(client: K8sClient, expected: str) -> None:
 
 
 __all__ = [
+    "ArgoApplicationView",
     "CertificateView",
     "ClusterContextMismatch",
     "IngressView",

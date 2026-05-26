@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import base64
 import hashlib
+from typing import Any
 
 from kubernetes import client as k8s_client
 from kubernetes import config as k8s_config
 from kubernetes.client import ApiException
 
 from certswap.drivers._k8s_client import (
+    ArgoApplicationView,
     CertificateView,
     IngressView,
     K8sClient,
@@ -25,6 +27,10 @@ CERT_MANAGER_VERSION = "v1"
 CERT_MANAGER_PLURAL = "certificates"
 CERT_MANAGER_ANNOTATION = "cert-manager.io/cluster-issuer"
 CERT_MANAGER_ANNOTATION_ISSUER = "cert-manager.io/issuer"
+
+ARGO_GROUP = "argoproj.io"
+ARGO_VERSION = "v1alpha1"
+ARGO_PLURAL = "applications"
 
 
 class LiveK8sClient(K8sClient):
@@ -170,6 +176,88 @@ class LiveK8sClient(K8sClient):
         except ApiException as exc:
             if exc.status != 404:
                 raise
+
+    def get_argo_application(
+        self, namespace: str, name: str
+    ) -> ArgoApplicationView | None:
+        try:
+            obj = self._cust.get_namespaced_custom_object(
+                group=ARGO_GROUP,
+                version=ARGO_VERSION,
+                namespace=namespace,
+                plural=ARGO_PLURAL,
+                name=name,
+            )
+        except ApiException as exc:
+            if exc.status == 404:
+                return None
+            raise
+        spec = obj.get("spec") or {}
+        automated = (spec.get("syncPolicy") or {}).get("automated") or {}
+        return ArgoApplicationView(
+            name=name,
+            namespace=namespace,
+            automated_sync=bool(automated),
+            self_heal=bool(automated.get("selfHeal", False)),
+            sync_options=tuple((spec.get("syncPolicy") or {}).get("syncOptions") or []),
+            ignore_differences_count=len(spec.get("ignoreDifferences") or []),
+        )
+
+    def disable_argo_automated_sync(self, namespace: str, name: str) -> None:
+        patch = {"spec": {"syncPolicy": {"automated": None}}}
+        self._patch_argo(namespace, name, patch)
+
+    def re_enable_argo_sync_no_selfheal(self, namespace: str, name: str) -> None:
+        patch = {"spec": {"syncPolicy": {"automated": {"prune": True, "selfHeal": False}}}}
+        self._patch_argo(namespace, name, patch)
+
+    def set_argo_respect_ignore_differences(
+        self,
+        namespace: str,
+        name: str,
+        target_secret: str,
+        target_ingress: str | None,
+    ) -> None:
+        # Pull current spec to merge sync options + ignoreDifferences sanely.
+        current = self._cust.get_namespaced_custom_object(
+            group=ARGO_GROUP, version=ARGO_VERSION, namespace=namespace,
+            plural=ARGO_PLURAL, name=name,
+        )
+        spec = current.get("spec") or {}
+        sync_options = list((spec.get("syncPolicy") or {}).get("syncOptions") or [])
+        if "RespectIgnoreDifferences=true" not in sync_options:
+            sync_options.append("RespectIgnoreDifferences=true")
+
+        ignore_diffs = list(spec.get("ignoreDifferences") or [])
+        ignore_diffs.append(
+            {"group": "", "kind": "Secret", "name": target_secret, "jsonPointers": ["/data"]}
+        )
+        if target_ingress is not None:
+            ignore_diffs.append(
+                {
+                    "group": "networking.k8s.io",
+                    "kind": "Ingress",
+                    "name": target_ingress,
+                    "jsonPointers": ["/metadata/annotations"],
+                }
+            )
+        patch = {
+            "spec": {
+                "syncPolicy": {"syncOptions": sync_options},
+                "ignoreDifferences": ignore_diffs,
+            }
+        }
+        self._patch_argo(namespace, name, patch)
+
+    def _patch_argo(self, namespace: str, name: str, body: dict[str, Any]) -> None:
+        self._cust.patch_namespaced_custom_object(
+            group=ARGO_GROUP,
+            version=ARGO_VERSION,
+            namespace=namespace,
+            plural=ARGO_PLURAL,
+            name=name,
+            body=body,
+        )
 
 
 def _leaf_fingerprint(pem_or_der: bytes) -> str | None:

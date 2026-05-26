@@ -165,6 +165,9 @@ def build_k8s_options(
     ingress: str | None,
     keep_cert_manager: bool,
     allow_host_mismatch: bool,
+    argocd_app: str | None = None,
+    argocd_namespace: str = "argocd",
+    argocd_wait_seconds: float | None = None,
 ) -> dict[str, Any]:
     return {
         "namespace": namespace,
@@ -173,6 +176,9 @@ def build_k8s_options(
         "ingress": ingress,
         "keep_cert_manager": keep_cert_manager,
         "allow_host_mismatch": allow_host_mismatch,
+        "argocd_app": argocd_app,
+        "argocd_namespace": argocd_namespace,
+        "argocd_wait_seconds": argocd_wait_seconds,
     }
 
 
