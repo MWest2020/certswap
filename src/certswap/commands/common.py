@@ -1,22 +1,31 @@
-"""Helpers shared by the plan / apply / verify command implementations."""
+"""Shared helpers for plan / apply / verify implementations.
+
+Render helpers live in :mod:`certswap.commands._render`; option builders
+live in :mod:`certswap.commands._options`. Both are re-exported here for
+backward compatibility so existing call sites keep working.
+"""
 
 from __future__ import annotations
 
-import json
 import os
 import sys
 from pathlib import Path
-from typing import Any
 
 import typer
-from rich.console import Console
-from rich.table import Table
 
-from certswap.drivers.base import ApplyResult, Plan, VerifyResult
+from certswap.commands._options import (
+    build_k8s_options,
+    build_local_options,
+    build_ssh_options,
+)
+from certswap.commands._render import (
+    console,
+    render_apply,
+    render_plan,
+    render_verify,
+)
 from certswap.ingest import IngestError, ingest
 from certswap.models import CertBundle
-
-console = Console()
 
 
 def resolve_password(password_env: str | None, password_stdin: bool) -> bytes | None:
@@ -56,7 +65,7 @@ def load_bundle(
 def confirm_or_exit(message: str, *, yes: bool, json_out: bool) -> None:
     """Prompt for confirmation unless --yes is given.
 
-    `--json` implies non-interactive: it acts like `--yes`. We never mix
+    ``--json`` implies non-interactive (acts like ``--yes``). We never mix
     JSON output with an interactive prompt.
     """
     if yes or json_out:
@@ -66,147 +75,15 @@ def confirm_or_exit(message: str, *, yes: bool, json_out: bool) -> None:
         raise typer.Exit(code=0)
 
 
-def render_plan(plan: Plan, *, json_out: bool) -> None:
-    if json_out:
-        typer.echo(json.dumps(plan.model_dump(), indent=2, default=str))
-        return
-
-    console.print(
-        f"[bold]Plan[/bold] for driver=[cyan]{plan.driver}[/cyan] "
-        f"target=[cyan]{plan.identifier}[/cyan]"
-    )
-    table = Table(show_header=True, header_style="bold")
-    table.add_column("#", style="dim", width=3)
-    table.add_column("Step")
-    table.add_column("Before", style="yellow")
-    table.add_column("Would do", style="green")
-    for idx, step in enumerate(plan.steps, start=1):
-        table.add_row(
-            str(idx),
-            step.description,
-            step.before or "—",
-            step.would_do or "—",
-        )
-    console.print(table)
-    for w in plan.warnings:
-        console.print(f"[yellow]warning:[/yellow] {w}")
-    for b in plan.blockers:
-        console.print(f"[red]blocker:[/red] {b}")
-
-
-def render_apply(result: ApplyResult, *, json_out: bool) -> None:
-    if json_out:
-        typer.echo(json.dumps(result.model_dump(), indent=2, default=str))
-        return
-
-    console.print(
-        f"[bold]Apply[/bold] driver=[cyan]{result.driver}[/cyan] "
-        f"target=[cyan]{result.identifier}[/cyan] exit={result.exit_code}"
-    )
-    table = Table(show_header=True, header_style="bold")
-    table.add_column("#", style="dim", width=3)
-    table.add_column("Step")
-    table.add_column("Before", style="yellow")
-    table.add_column("After", style="green")
-    table.add_column("ms", justify="right", style="dim")
-    table.add_column("OK")
-    for idx, step in enumerate(result.steps, start=1):
-        table.add_row(
-            str(idx),
-            step.description,
-            step.before or "—",
-            step.after or "—",
-            str(step.duration_ms),
-            "[green]✓[/green]" if step.ok else f"[red]✗ {step.error or ''}[/red]",
-        )
-    console.print(table)
-    if result.verify is not None:
-        render_verify(result.verify, json_out=False)
-
-
-def render_verify(result: VerifyResult, *, json_out: bool) -> None:
-    if json_out:
-        typer.echo(json.dumps(result.model_dump(), indent=2, default=str))
-        return
-
-    table = Table(show_header=True, header_style="bold", title="Verification")
-    table.add_column("Check")
-    table.add_column("OK")
-    table.add_column("Detail", style="dim")
-    for chk in result.checks:
-        table.add_row(
-            chk.name,
-            "[green]✓[/green]" if chk.ok else "[red]✗[/red]",
-            chk.detail or "",
-        )
-    console.print(table)
-    if not result.ok:
-        console.print("[red]verify FAILED[/red]")
-
-
-def build_local_options(
-    dest: Path,
-    cert_name: str,
-    combined: bool,
-    force: bool,
-) -> dict[str, Any]:
-    return {
-        "dest": str(dest),
-        "cert_name": cert_name,
-        "combined": combined,
-        "force": force,
-    }
-
-
-def build_k8s_options(
-    namespace: str,
-    secret: str,
-    context: str | None,
-    ingress: str | None,
-    keep_cert_manager: bool,
-    allow_host_mismatch: bool,
-    argocd_app: str | None = None,
-    argocd_namespace: str = "argocd",
-    argocd_wait_seconds: float | None = None,
-) -> dict[str, Any]:
-    return {
-        "namespace": namespace,
-        "secret": secret,
-        "context": context,
-        "ingress": ingress,
-        "keep_cert_manager": keep_cert_manager,
-        "allow_host_mismatch": allow_host_mismatch,
-        "argocd_app": argocd_app,
-        "argocd_namespace": argocd_namespace,
-        "argocd_wait_seconds": argocd_wait_seconds,
-    }
-
-
-def build_ssh_options(
-    host: str,
-    cert_dest: str | None,
-    key_dest: str | None,
-    chain_dest: str | None,
-    combined_dest: str | None,
-    mode_cert: int,
-    mode_key: int,
-    owner: str | None,
-    group: str | None,
-    reload_cmd: str | None,
-    pre_check_cmd: str | None,
-    post_check_cmd: str | None,
-) -> dict[str, Any]:
-    return {
-        "host": host,
-        "cert_dest": cert_dest,
-        "key_dest": key_dest,
-        "chain_dest": chain_dest,
-        "combined_dest": combined_dest,
-        "mode_cert": mode_cert,
-        "mode_key": mode_key,
-        "owner": owner,
-        "group": group,
-        "reload_cmd": reload_cmd,
-        "pre_check_cmd": pre_check_cmd,
-        "post_check_cmd": post_check_cmd,
-    }
+__all__ = [
+    "build_k8s_options",
+    "build_local_options",
+    "build_ssh_options",
+    "confirm_or_exit",
+    "console",
+    "load_bundle",
+    "render_apply",
+    "render_plan",
+    "render_verify",
+    "resolve_password",
+]

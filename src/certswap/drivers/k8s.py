@@ -5,29 +5,28 @@ secret and strips the ``cert-manager.io/cluster-issuer`` annotation
 from an Ingress (when supplied) so subsequent reconciliation does not
 overwrite the manual swap.
 
-ArgoCD reconciliation handling lives in M4b on top of this driver.
+ArgoCD coordination lives in :mod:`certswap.drivers._k8s_argo`.
 """
 
 from __future__ import annotations
 
-import time
 from collections.abc import Callable
 
 from certswap.core.validation import san_matches_host
+from certswap.drivers import _k8s_argo
+from certswap.drivers._k8s_apply import record_step as _step
 from certswap.drivers._k8s_client import (
-    ArgoApplicationView,
     ClusterContextMismatch,
     K8sClient,
     load,
     verify_context,
 )
 from certswap.drivers._k8s_options import K8sOptions
+from certswap.drivers._k8s_verify import build_verify_result
 from certswap.drivers.base import (
     ApplyResult,
-    CheckResult,
     Plan,
     PlanStep,
-    StepResult,
     TargetContext,
     VerifyResult,
     register,
@@ -51,7 +50,6 @@ class K8sDriver:
         except Exception as exc:
             plan.blockers.append(f"k8s client setup failed: {exc}")
             return plan
-
         if opts.context:
             try:
                 verify_context(client, opts.context)
@@ -88,53 +86,39 @@ class K8sDriver:
                 "--keep-cert-manager set; it will overwrite this secret on reconcile"
             )
 
-        if opts.ingress:
-            ingress = client.get_ingress(opts.namespace, opts.ingress)
-            if ingress is None:
-                plan.blockers.append(f"ingress {opts.namespace}/{opts.ingress} not found")
-                return plan
-            if not opts.allow_host_mismatch:
-                mismatched = [h for h in ingress.hosts if not san_matches_host(bundle, h)]
-                if mismatched:
-                    plan.blockers.append(
-                        f"ingress hosts {mismatched} not covered by leaf SANs "
-                        f"{bundle.sans()}; pass --allow-host-mismatch to override"
-                    )
-                    return plan
-            if ingress.cert_manager_annotation and not opts.keep_cert_manager:
-                plan.steps.insert(
-                    0,
-                    PlanStep(
-                        description=f"strip Ingress annotation on {ingress.name}",
-                        before=f"cert-manager annotation={ingress.cert_manager_annotation}",
-                        would_do="remove cert-manager.io/cluster-issuer annotation",
-                    ),
-                )
+        if opts.ingress and not self._annotate_ingress_plan(plan, bundle, opts, client):
+            return plan
+        if not _k8s_argo.annotate_plan(plan, opts, client):
+            return plan
+        return plan
 
-        if opts.argocd_app:
-            argo = client.get_argo_application(opts.argocd_namespace, opts.argocd_app)
-            if argo is None:
+    def _annotate_ingress_plan(
+        self, plan: Plan, bundle: CertBundle, opts: K8sOptions, client: K8sClient
+    ) -> bool:
+        # Caller guarantees opts.ingress is set.
+        ingress_name = opts.ingress or ""
+        ingress = client.get_ingress(opts.namespace, ingress_name)
+        if ingress is None:
+            plan.blockers.append(f"ingress {opts.namespace}/{ingress_name} not found")
+            return False
+        if not opts.allow_host_mismatch:
+            mismatched = [h for h in ingress.hosts if not san_matches_host(bundle, h)]
+            if mismatched:
                 plan.blockers.append(
-                    f"argocd Application {opts.argocd_namespace}/{opts.argocd_app} not found"
+                    f"ingress hosts {mismatched} not covered by leaf SANs "
+                    f"{bundle.sans()}; pass --allow-host-mismatch to override"
                 )
-                return plan
+                return False
+        if ingress.cert_manager_annotation and not opts.keep_cert_manager:
             plan.steps.insert(
                 0,
                 PlanStep(
-                    description=f"argocd: disable automated sync + selfHeal on {argo.name}",
-                    before=_describe_argo(argo),
-                    would_do="patch Application: automated=null, "
-                    "RespectIgnoreDifferences=true, ignoreDifferences+={secret,ingress}",
+                    description=f"strip Ingress annotation on {ingress.name}",
+                    before=f"cert-manager annotation={ingress.cert_manager_annotation}",
+                    would_do="remove cert-manager.io/cluster-issuer annotation",
                 ),
             )
-            plan.steps.append(
-                PlanStep(
-                    description=f"argocd: re-enable automated sync (selfHeal=false) on {argo.name}",
-                    before=None,
-                    would_do="patch Application: automated.{prune=true, selfHeal=false}",
-                )
-            )
-        return plan
+        return True
 
     def apply(self, bundle: CertBundle, ctx: TargetContext) -> ApplyResult:
         opts = K8sOptions.from_context(ctx)
@@ -143,34 +127,14 @@ class K8sDriver:
         if opts.context:
             verify_context(client, opts.context)
 
-        # Argo pre-step: silence the reconciler before we touch anything it
-        # owns. Otherwise selfHeal will re-apply the cert-manager
-        # Certificate / Ingress annotation milliseconds after we wipe them.
-        if opts.argocd_app:
-            _step(
-                result,
-                f"argocd: disable automated sync on {opts.argocd_app}",
-                lambda: client.disable_argo_automated_sync(
-                    opts.argocd_namespace, opts.argocd_app  # type: ignore[arg-type]
-                ),
-            )
-            _step(
-                result,
-                f"argocd: set RespectIgnoreDifferences on {opts.argocd_app}",
-                lambda: client.set_argo_respect_ignore_differences(
-                    opts.argocd_namespace,
-                    opts.argocd_app,  # type: ignore[arg-type]
-                    target_secret=opts.secret,
-                    target_ingress=opts.ingress,
-                ),
-            )
+        _k8s_argo.apply_pre(result, opts, client, record_step=_step)
 
         if opts.ingress and not opts.keep_cert_manager:
             _step(
                 result,
                 f"strip ingress annotation on {opts.ingress}",
                 lambda: client.strip_ingress_cert_manager_annotation(
-                    opts.namespace, opts.ingress  # type: ignore[arg-type]
+                    opts.namespace, opts.ingress or ""
                 ),
             )
 
@@ -196,24 +160,14 @@ class K8sDriver:
             ),
         )
 
-        # Argo post-step: re-enable automated sync but keep selfHeal off —
-        # selfHeal ignores ignoreDifferences entirely, so leaving it true
-        # would void everything we just did.
-        if opts.argocd_app:
-            _step(
-                result,
-                f"argocd: re-enable automated sync (selfHeal=false) on {opts.argocd_app}",
-                lambda: client.re_enable_argo_sync_no_selfheal(
-                    opts.argocd_namespace, opts.argocd_app  # type: ignore[arg-type]
-                ),
-            )
-            if opts.argocd_wait_seconds > 0:
-                time.sleep(opts.argocd_wait_seconds)
+        _k8s_argo.apply_post(result, opts, client, record_step=_step)
 
         if any(not s.ok for s in result.steps):
             result.exit_code = 50
             return result
-        result.verify = self._verify_with_bundle(client, opts, bundle.fingerprint_sha256())
+        result.verify = build_verify_result(
+            client, opts, expected_fingerprint=bundle.fingerprint_sha256()
+        )
         if not result.verify.ok:
             result.exit_code = 60
         return result
@@ -221,117 +175,13 @@ class K8sDriver:
     def verify(self, ctx: TargetContext) -> VerifyResult:
         opts = K8sOptions.from_context(ctx)
         client = self._factory(opts.context)
-        return self._verify_with_bundle(client, opts, expected_fingerprint=None)
-
-    def _verify_with_bundle(
-        self, client: K8sClient, opts: K8sOptions, expected_fingerprint: str | None
-    ) -> VerifyResult:
-        checks: list[CheckResult] = []
-        all_ok = True
-        secret = client.get_secret(opts.namespace, opts.secret)
-        secret_ok = secret is not None and secret.type == "kubernetes.io/tls"
-        checks.append(
-            CheckResult(
-                name=f"secret {opts.namespace}/{opts.secret} is kubernetes.io/tls",
-                ok=secret_ok,
-                detail=None if secret_ok else "secret missing or wrong type",
-            )
-        )
-        all_ok = all_ok and secret_ok
-
-        if secret_ok and expected_fingerprint is not None:
-            match = secret is not None and secret.fingerprint_sha256 == expected_fingerprint
-            checks.append(
-                CheckResult(
-                    name="secret tls.crt matches bundle fingerprint",
-                    ok=match,
-                    detail=None
-                    if match
-                    else f"got {secret.fingerprint_sha256 if secret else None}",
-                )
-            )
-            all_ok = all_ok and match
-
-        if opts.ingress:
-            ingress = client.get_ingress(opts.namespace, opts.ingress)
-            if ingress is None:
-                checks.append(
-                    CheckResult(name=f"ingress {opts.ingress} present", ok=False)
-                )
-                all_ok = False
-            elif not opts.keep_cert_manager:
-                annot_ok = ingress.cert_manager_annotation is None
-                checks.append(
-                    CheckResult(
-                        name="ingress free of cert-manager.io/cluster-issuer",
-                        ok=annot_ok,
-                        detail=None
-                        if annot_ok
-                        else f"annotation back: {ingress.cert_manager_annotation}",
-                    )
-                )
-                all_ok = all_ok and annot_ok
-
-        # Also confirm cert-manager has not re-created the Certificate.
-        if not opts.keep_cert_manager:
-            cert = client.find_certificate_for_secret(opts.namespace, opts.secret)
-            cert_gone = cert is None
-            checks.append(
-                CheckResult(
-                    name="cert-manager Certificate not re-created",
-                    ok=cert_gone,
-                    detail=None if cert_gone else f"Certificate back: {cert.name if cert else ''}",
-                )
-            )
-            all_ok = all_ok and cert_gone
-
-        if opts.argocd_app:
-            argo = client.get_argo_application(opts.argocd_namespace, opts.argocd_app)
-            argo_ok = argo is not None and not argo.self_heal
-            checks.append(
-                CheckResult(
-                    name=f"argocd {opts.argocd_app} has selfHeal=false",
-                    ok=argo_ok,
-                    detail=None if argo_ok else "selfHeal back on or Application gone",
-                )
-            )
-            all_ok = all_ok and argo_ok
-        return VerifyResult(ok=all_ok, checks=checks)
+        return build_verify_result(client, opts, expected_fingerprint=None)
 
 
 def _describe_secret(secret: object) -> str | None:
     if secret is None:
         return None
     return f"type={getattr(secret, 'type', '?')} fp={getattr(secret, 'fingerprint_sha256', '?')}"
-
-
-def _describe_argo(app: ArgoApplicationView) -> str:
-    return (
-        f"automated={app.automated_sync} selfHeal={app.self_heal} "
-        f"syncOptions={list(app.sync_options)} "
-        f"ignoreDifferences[{app.ignore_differences_count}]"
-    )
-
-
-def _step(result: ApplyResult, description: str, action: Callable[[], object]) -> None:
-    start = time.perf_counter()
-    try:
-        action()
-        ok = True
-        err: str | None = None
-    except Exception as exc:
-        ok = False
-        err = str(exc)
-    result.steps.append(
-        StepResult(
-            description=description,
-            before=None,
-            after=None,
-            duration_ms=int((time.perf_counter() - start) * 1000),
-            ok=ok,
-            error=err,
-        )
-    )
 
 
 register(K8sDriver())
