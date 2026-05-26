@@ -168,11 +168,25 @@ class LocalDriver:
 
 
 def _atomic_write(path: Path, data: bytes, *, mode: int) -> None:
+    """Write ``data`` to ``path`` atomically, with ``mode`` from creation.
+
+    Creating the tmp file with the target mode (rather than chmod-after)
+    closes the brief window in which a 0o600 key would otherwise be
+    world-readable due to the default umask.
+    """
     tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("wb") as fh:
-        fh.write(data)
-    os.chmod(tmp, mode)
-    os.replace(tmp, path)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    fd = os.open(tmp, flags, mode)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        # chmod again in case an existing tmpfile predated this run with
+        # different perms (O_TRUNC reuses the inode + perms).
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except Exception:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 _DRIVER = LocalDriver()
