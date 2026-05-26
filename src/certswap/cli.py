@@ -6,6 +6,7 @@ from certswap import __version__
 from certswap.commands.apply import apply_app
 from certswap.commands.inspect import inspect_command
 from certswap.commands.plan import plan_app
+from certswap.commands.upcoming import upcoming_command
 from certswap.commands.verify import verify_app
 
 app = typer.Typer(
@@ -37,6 +38,7 @@ def _root(
 
 
 app.command(name="inspect")(inspect_command)
+app.command(name="upcoming")(upcoming_command)
 app.add_typer(plan_app, name="plan")
 app.add_typer(apply_app, name="apply")
 app.add_typer(verify_app, name="verify")
