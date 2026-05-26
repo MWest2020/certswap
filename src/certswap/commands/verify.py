@@ -7,7 +7,12 @@ from typing import Annotated
 
 import typer
 
-from certswap.commands.common import build_local_options, build_ssh_options, render_verify
+from certswap.commands.common import (
+    build_k8s_options,
+    build_local_options,
+    build_ssh_options,
+    render_verify,
+)
 from certswap.drivers.base import TargetContext, get_driver
 
 verify_app = typer.Typer(name="verify", help="Post-check a target without supplying a bundle.")
@@ -63,6 +68,37 @@ def verify_ssh(
     ident = cert_dest or combined_dest or key_dest or host
     ctx = TargetContext(driver="ssh", identifier=f"{host}:{ident}", options=options)
     result = get_driver("ssh").verify(ctx)
+    render_verify(result, json_out=json_out)
+    if not result.ok:
+        raise typer.Exit(code=60)
+
+
+@verify_app.command(name="k8s")
+def verify_k8s(
+    secret: Annotated[str, typer.Option("--secret")],
+    namespace: Annotated[str, typer.Option("--namespace", "-n")],
+    context: Annotated[str | None, typer.Option("--context")] = None,
+    ingress: Annotated[str | None, typer.Option("--ingress")] = None,
+    keep_cert_manager: Annotated[bool, typer.Option("--keep-cert-manager")] = False,
+    json_out: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Verify a kubernetes.io/tls Secret (and optionally an Ingress's lack of
+    cert-manager annotation) without supplying a bundle.
+    """
+    options = build_k8s_options(
+        namespace=namespace,
+        secret=secret,
+        context=context,
+        ingress=ingress,
+        keep_cert_manager=keep_cert_manager,
+        allow_host_mismatch=False,
+    )
+    ctx = TargetContext(
+        driver="k8s",
+        identifier=f"{namespace}/{secret}@{context or 'current-context'}",
+        options=options,
+    )
+    result = get_driver("k8s").verify(ctx)
     render_verify(result, json_out=json_out)
     if not result.ok:
         raise typer.Exit(code=60)

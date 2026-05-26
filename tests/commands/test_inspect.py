@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from certswap.cli import app
@@ -26,7 +27,9 @@ def test_inspect_pem_json_output(pem_bundle: Path) -> None:
     assert "fingerprint_sha256" in payload["leaf"]
 
 
-def test_inspect_pfx_with_password_env(pfx_bundle: Path, monkeypatch) -> None:
+def test_inspect_pfx_with_password_env(
+    pfx_bundle: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("CSW_TEST_PASS", "hunter2")
     result = runner.invoke(
         app,

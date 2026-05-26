@@ -8,6 +8,7 @@ from typing import Annotated
 import typer
 
 from certswap.commands.common import (
+    build_k8s_options,
     build_local_options,
     build_ssh_options,
     confirm_or_exit,
@@ -163,6 +164,70 @@ def apply_ssh(
     if not json_out:
         render_plan(plan, json_out=False)
     confirm_or_exit(f"Apply to {host}?", yes=yes, json_out=json_out)
+
+    result = driver.apply(cb, ctx)
+    render_apply(result, json_out=json_out)
+
+    record = build_record(cb, ctx, result)
+    written = write_evidence(record, evidence_dir or default_evidence_root())
+    if not json_out:
+        typer.echo(f"evidence: {written}")
+    if result.exit_code == 0:
+        state_append(
+            StateEntry(
+                timestamp=record.timestamp_utc,
+                target=ctx.driver,
+                identifier=ctx.identifier,
+                fingerprint=cb.fingerprint_sha256(),
+                not_after=cb.not_after(),
+                evidence_dir=str(written),
+            )
+        )
+    if result.exit_code != 0:
+        raise typer.Exit(code=result.exit_code)
+
+
+@apply_app.command(name="k8s")
+def apply_k8s(
+    bundle: Annotated[Path, typer.Argument(exists=True, readable=True)],
+    secret: Annotated[str, typer.Option("--secret")],
+    namespace: Annotated[str, typer.Option("--namespace", "-n")],
+    context: Annotated[str | None, typer.Option("--context")] = None,
+    ingress: Annotated[str | None, typer.Option("--ingress")] = None,
+    keep_cert_manager: Annotated[bool, typer.Option("--keep-cert-manager")] = False,
+    allow_host_mismatch: Annotated[bool, typer.Option("--allow-host-mismatch")] = False,
+    password_env: Annotated[str | None, typer.Option("--password-env")] = None,
+    password_stdin: Annotated[bool, typer.Option("--password-stdin")] = False,
+    key: Annotated[Path | None, typer.Option("--key", exists=True, readable=True)] = None,
+    chain_path: Annotated[Path | None, typer.Option("--chain", exists=True, readable=True)] = None,
+    yes: Annotated[bool, typer.Option("--yes", "-y")] = False,
+    json_out: Annotated[bool, typer.Option("--json")] = False,
+    evidence_dir: Annotated[Path | None, typer.Option("--evidence-dir")] = None,
+) -> None:
+    """Apply the bundle as a kubernetes.io/tls Secret."""
+    password = resolve_password(password_env, password_stdin)
+    cb = load_bundle(bundle, password=password, key=key, chain=chain_path)
+    options = build_k8s_options(
+        namespace=namespace,
+        secret=secret,
+        context=context,
+        ingress=ingress,
+        keep_cert_manager=keep_cert_manager,
+        allow_host_mismatch=allow_host_mismatch,
+    )
+    ctx = TargetContext(
+        driver="k8s",
+        identifier=f"{namespace}/{secret}@{context or 'current-context'}",
+        options=options,
+    )
+    driver = get_driver("k8s")
+    plan = driver.plan(cb, ctx)
+    if plan.is_blocked:
+        render_plan(plan, json_out=json_out)
+        raise typer.Exit(code=10)
+    if not json_out:
+        render_plan(plan, json_out=False)
+    confirm_or_exit(f"Apply to {namespace}/{secret}?", yes=yes, json_out=json_out)
 
     result = driver.apply(cb, ctx)
     render_apply(result, json_out=json_out)

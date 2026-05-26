@@ -158,6 +158,24 @@ def build_local_options(
     }
 
 
+def build_k8s_options(
+    namespace: str,
+    secret: str,
+    context: str | None,
+    ingress: str | None,
+    keep_cert_manager: bool,
+    allow_host_mismatch: bool,
+) -> dict[str, Any]:
+    return {
+        "namespace": namespace,
+        "secret": secret,
+        "context": context,
+        "ingress": ingress,
+        "keep_cert_manager": keep_cert_manager,
+        "allow_host_mismatch": allow_host_mismatch,
+    }
+
+
 def build_ssh_options(
     host: str,
     cert_dest: str | None,
