@@ -3,7 +3,10 @@ from __future__ import annotations
 import typer
 
 from certswap import __version__
+from certswap.commands.apply import apply_app
 from certswap.commands.inspect import inspect_command
+from certswap.commands.plan import plan_app
+from certswap.commands.verify import verify_app
 
 app = typer.Typer(
     name="certswap",
@@ -34,6 +37,9 @@ def _root(
 
 
 app.command(name="inspect")(inspect_command)
+app.add_typer(plan_app, name="plan")
+app.add_typer(apply_app, name="apply")
+app.add_typer(verify_app, name="verify")
 
 
 def main() -> None:
