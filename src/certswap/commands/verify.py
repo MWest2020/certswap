@@ -106,3 +106,18 @@ def verify_k8s(
     render_verify(result, json_out=json_out)
     if not result.ok:
         raise typer.Exit(code=60)
+
+
+@verify_app.command(name="proxmox")
+def verify_proxmox(
+    host: Annotated[str, typer.Option("--host")],
+    json_out: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Verify Proxmox VE pveproxy cert files are present."""
+    ctx = TargetContext(
+        driver="proxmox", identifier=f"{host}:pveproxy", options={"host": host}
+    )
+    result = get_driver("proxmox").verify(ctx)
+    render_verify(result, json_out=json_out)
+    if not result.ok:
+        raise typer.Exit(code=60)

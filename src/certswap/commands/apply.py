@@ -255,3 +255,52 @@ def apply_k8s(
         )
     if result.exit_code != 0:
         raise typer.Exit(code=result.exit_code)
+
+
+@apply_app.command(name="proxmox")
+def apply_proxmox(
+    bundle: Annotated[Path, typer.Argument(exists=True, readable=True)],
+    host: Annotated[str, typer.Option("--host")],
+    password_env: Annotated[str | None, typer.Option("--password-env")] = None,
+    password_stdin: Annotated[bool, typer.Option("--password-stdin")] = False,
+    key: Annotated[Path | None, typer.Option("--key", exists=True, readable=True)] = None,
+    chain_path: Annotated[Path | None, typer.Option("--chain", exists=True, readable=True)] = None,
+    yes: Annotated[bool, typer.Option("--yes", "-y")] = False,
+    json_out: Annotated[bool, typer.Option("--json")] = False,
+    evidence_dir: Annotated[Path | None, typer.Option("--evidence-dir")] = None,
+) -> None:
+    """Apply the bundle to a Proxmox VE node's pveproxy."""
+    password = resolve_password(password_env, password_stdin)
+    cb = load_bundle(bundle, password=password, key=key, chain=chain_path)
+    ctx = TargetContext(
+        driver="proxmox", identifier=f"{host}:pveproxy", options={"host": host}
+    )
+    driver = get_driver("proxmox")
+    plan = driver.plan(cb, ctx)
+    if plan.is_blocked:
+        render_plan(plan, json_out=json_out)
+        raise typer.Exit(code=10)
+    if not json_out:
+        render_plan(plan, json_out=False)
+    confirm_or_exit(f"Apply to {host} (Proxmox VE)?", yes=yes, json_out=json_out)
+
+    result = driver.apply(cb, ctx)
+    render_apply(result, json_out=json_out)
+
+    record = build_record(cb, ctx, result)
+    written = write_evidence(record, evidence_dir or default_evidence_root())
+    if not json_out:
+        typer.echo(f"evidence: {written}")
+    if result.exit_code == 0:
+        state_append(
+            StateEntry(
+                timestamp=record.timestamp_utc,
+                target=ctx.driver,
+                identifier=ctx.identifier,
+                fingerprint=cb.fingerprint_sha256(),
+                not_after=cb.not_after(),
+                evidence_dir=str(written),
+            )
+        )
+    if result.exit_code != 0:
+        raise typer.Exit(code=result.exit_code)
