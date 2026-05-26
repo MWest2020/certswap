@@ -17,11 +17,11 @@ class ArchiveError(ValueError):
 
 
 def _safe_zip_extract(path: Path, dest: Path) -> None:
+    dest_resolved = dest.resolve()
     with zipfile.ZipFile(path) as zf:
         for member in zf.namelist():
-            # Reject absolute or traversal paths.
             target = (dest / member).resolve()
-            if not str(target).startswith(str(dest.resolve())):
+            if not target.is_relative_to(dest_resolved):
                 raise ArchiveError(f"zip entry escapes target dir: {member!r}")
         zf.extractall(dest)  # noqa: S202 -- members vetted above
 
@@ -31,12 +31,12 @@ def _safe_tar_extract(path: Path, dest: Path) -> None:
     # compression we accept (.gz, .tgz, .bz2, .xz). Keeping the open mode
     # constant avoids the Literal-overload juggling mypy would otherwise
     # impose.
+    dest_resolved = dest.resolve()
     with tarfile.open(path, "r:*") as tf:
         members = tf.getmembers()
-        dest_resolved = dest.resolve()
         for m in members:
             target = (dest / m.name).resolve()
-            if not str(target).startswith(str(dest_resolved)):
+            if not target.is_relative_to(dest_resolved):
                 raise ArchiveError(f"tar entry escapes target dir: {m.name!r}")
             if m.islnk() or m.issym():
                 raise ArchiveError(f"tar entry is a link, refused: {m.name!r}")

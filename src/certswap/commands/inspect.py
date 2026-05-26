@@ -209,6 +209,11 @@ def inspect_command(
     except IngestError as exc:
         typer.echo(f"ingest failed: {exc}", err=True)
         raise typer.Exit(code=30) from exc
+    except ValueError as exc:
+        # cryptography raises ValueError for parse / decryption failures
+        # below the IngestError layer (e.g. wrong password, malformed DER).
+        typer.echo(f"ingest failed: {exc}", err=True)
+        raise typer.Exit(code=30) from exc
 
     if fetch_intermediates:
         bundle = complete_chain(bundle, fetch=True)

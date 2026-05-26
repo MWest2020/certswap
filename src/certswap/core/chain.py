@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 
 AIA_TIMEOUT_SECONDS: Final = 10.0
 AIA_MAX_HOPS: Final = 5  # safety bound to avoid runaway chains
+AIA_MAX_BYTES: Final = 256 * 1024  # any single intermediate fits well under this
+AIA_ALLOWED_SCHEMES: Final = frozenset({"http", "https"})
 
 
 def order_chain(
@@ -77,13 +79,38 @@ def _aia_ca_issuer_urls(cert: x509.Certificate) -> list[str]:
 
 
 def _fetch_cert(url: str, *, client: httpx.Client) -> x509.Certificate | None:
+    # AIA URLs come from the bundle itself, which the operator already
+    # decided to trust enough to ingest — but defend against pathological
+    # certs anyway: cap size, restrict to http(s), and reject redirects.
     try:
-        response = client.get(url, timeout=AIA_TIMEOUT_SECONDS)
-        response.raise_for_status()
+        parsed = httpx.URL(url)
+    except (httpx.InvalidURL, TypeError):
+        logger.warning("AIA URL malformed: %r", url)
+        return None
+    if parsed.scheme not in AIA_ALLOWED_SCHEMES:
+        logger.warning("AIA URL has disallowed scheme: %r", url)
+        return None
+
+    try:
+        with client.stream("GET", url, timeout=AIA_TIMEOUT_SECONDS) as response:
+            response.raise_for_status()
+            chunks: list[bytes] = []
+            total = 0
+            for chunk in response.iter_bytes():
+                total += len(chunk)
+                if total > AIA_MAX_BYTES:
+                    logger.warning(
+                        "AIA response from %s exceeds %d bytes; refused",
+                        url,
+                        AIA_MAX_BYTES,
+                    )
+                    return None
+                chunks.append(chunk)
+            data = b"".join(chunks)
     except httpx.HTTPError as exc:
         logger.warning("AIA fetch failed for %s: %s", url, exc)
         return None
-    data = response.content
+
     if data.lstrip().startswith(b"-----BEGIN"):
         try:
             return x509.load_pem_x509_certificate(data)
@@ -110,7 +137,9 @@ def complete_chain(
     if not fetch or chain_is_complete(ordered):
         return bundle.model_copy(update={"chain": ordered})
 
-    with httpx.Client(follow_redirects=True) as client:
+    # follow_redirects=False: AIA redirects are vanishingly rare and a
+    # redirect target could escape the scheme guard above.
+    with httpx.Client(follow_redirects=False) as client:
         for _ in range(AIA_MAX_HOPS):
             tail = ordered[-1] if ordered else bundle.leaf
             if tail.issuer.public_bytes() == tail.subject.public_bytes():
