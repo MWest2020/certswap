@@ -1,11 +1,23 @@
 [project]
 name = "certswap"
-version = "0.1.0"
-description = "Deterministic TLS bundle swap CLI: ingest any cert format, deploy to k8s/ssh/local/proxmox with validation and evidence."
+version = "0.2.0"
+description = "Deterministic TLS bundle swap CLI: ingest any cert format, deploy to k8s/ssh/local/proxmox with validation, evidence, and ArgoCD-safe swaps."
 readme = "README.md"
-license = { text = "EUPL-1.2" }
+license = "EUPL-1.2"
+license-files = ["LICENSE"]
 authors = [{ name = "Mark Westerweel", email = "mark@conduction.nl" }]
 requires-python = ">=3.12"
+keywords = ["tls", "certificates", "kubernetes", "argocd", "gitops", "certificate-rotation", "pfx", "devops"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: System Administrators",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security :: Cryptography",
+    "Topic :: System :: Systems Administration",
+]
 dependencies = [
     "cryptography>=48.0.0",
     "httpx>=0.28.1",
@@ -14,6 +26,12 @@ dependencies = [
     "rich>=15.0.0",
     "typer>=0.26.1",
 ]
+
+[project.urls]
+Homepage = "https://github.com/MWest2020/certswap"
+Repository = "https://github.com/MWest2020/certswap"
+Changelog = "https://github.com/MWest2020/certswap/blob/main/CHANGELOG.md"
+Issues = "https://github.com/MWest2020/certswap/issues"
 
 [project.scripts]
 certswap = "certswap.cli:main"

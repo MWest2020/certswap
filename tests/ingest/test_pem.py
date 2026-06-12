@@ -56,3 +56,12 @@ def test_ingest_keyless_pem(cert_only_pem: Path) -> None:
     cb = ingest(cert_only_pem, require_key=False)
     assert cb.private_key is None
     assert cb.source_format == SourceFormat.PEM_BUNDLE
+
+
+def test_ingest_cert_only_pem_with_explicit_key(
+    cert_only_pem: Path, separate_files_dir: Path
+) -> None:
+    # CA-delivered fullchain (no embedded key) + --key must combine the two.
+    cb = ingest(cert_only_pem, key_path=separate_files_dir / "privkey.pem")
+    assert cb.private_key is not None
+    assert cb.subject_cn() == "test.certswap.example"

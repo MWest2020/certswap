@@ -2,10 +2,31 @@
 
 All notable changes to certswap. Dates are ISO (YYYY-MM-DD).
 
-## [Unreleased] — 2026-06-12
+## [0.2.0] — 2026-06-12
 
-Production-hardening of the ArgoCD coordination layer plus keyless
-inspection, prompted by an internal review for team (Conduction) use.
+### Added (packaging / community release)
+- PyPI packaging metadata: SPDX license, classifiers, keywords, project
+  URLs; version bumped to 0.2.0. Official EUPL-1.2 text added as
+  `LICENSE`.
+- GitHub Actions: `ci.yml` (ruff + mypy + pytest on 3.12/3.13, locked
+  sync) and `release.yml` (tag-triggered build + PyPI trusted publishing,
+  with a tag↔`__version__` consistency check).
+- `CONTRIBUTING.md` with the quality gate, 200-line cap, fake-injection
+  testing convention, and release procedure.
+- README: positioning intro (out-of-band TLS replacement for
+  GitOps-managed and mixed infrastructure), PyPI install instructions,
+  disambiguation note vs the archived `pivotal-cf/certswap`.
+
+### Fixed
+- `ingest`: an explicit `--key` was silently ignored (exit 30 before
+  this release) when the cert file was a PEM bundle without an embedded
+  key — the common "CA-delivered fullchain + separately generated key"
+  case. The two are now combined via the separate-files path.
+  (`ingest/__init__.py`)
+
+The sections below are the production-hardening of the ArgoCD
+coordination layer plus keyless inspection, prompted by an internal
+review for team (Conduction) use.
 
 ### Changed
 - **ArgoCD: original sync policy is now saved and restored.** Before, the

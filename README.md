@@ -7,14 +7,23 @@ PKCS#7, zip/tar archive), validate it, and deploy it to a target — a
 Kubernetes secret, an SSH-reachable VM, a local directory, or a Proxmox
 host — with a structured evidence trail per swap.
 
-Single-user tool, personal infrastructure use. v0.1.0.
+Built for the operational reality no other tool covers: a CA or customer
+hands you a bundle out-of-band and it has to land safely on
+GitOps-managed or mixed infrastructure. ACME clients automate
+issuance-driven renewal; cert-manager owns the in-cluster path; certswap
+handles everything that arrives by hand — with an ArgoCD-safe swap that
+existing tooling only documents as a manual procedure.
+
+Not related to the archived `pivotal-cf/certswap` (a Go tool for
+swapping system trust stores).
 
 ## Install
 
 Requires Python 3.12+ and [`uv`](https://docs.astral.sh/uv/).
 
 ```sh
-uv tool install git+https://github.com/MWest2020/certswap
+uv tool install certswap        # from PyPI (first release pending)
+uv tool install git+https://github.com/MWest2020/certswap   # latest main
 ```
 
 For local development:

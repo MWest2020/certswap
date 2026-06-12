@@ -51,7 +51,16 @@ def ingest(
     effective_key_password = key_password if key_password is not None else password
 
     if fmt == SourceFormat.PEM_BUNDLE:
-        return parse_pem(path, require_key=require_key)
+        bundle = parse_pem(path, require_key=require_key and key_path is None)
+        if bundle.private_key is None and key_path is not None:
+            # Cert-only PEM (e.g. a CA-delivered fullchain) + explicit --key.
+            return parse_separate(
+                cert_path=path,
+                key_path=key_path,
+                chain_path=chain_path,
+                key_password=effective_key_password,
+            )
+        return bundle
     if fmt == SourceFormat.PFX:
         try:
             return parse_pfx(path, password)

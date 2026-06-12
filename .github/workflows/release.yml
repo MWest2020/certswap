@@ -1,0 +1,53 @@
+name: Release to PyPI
+
+# Publishes on a version tag (v0.2.0, v1.0.0, ...). Uses PyPI trusted
+# publishing (OIDC) — no API token stored in the repo. One-time setup:
+# pypi.org → project certswap → Publishing → add GitHub publisher
+# (owner MWest2020, repo certswap, workflow release.yml, env pypi).
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Quality gate
+        run: |
+          uv sync --dev --frozen
+          uv run ruff check .
+          uv run mypy src
+          uv run pytest -q
+      - name: Verify tag matches package version
+        run: |
+          pkg_version="$(uv run python -c 'import certswap; print(certswap.__version__)')"
+          tag_version="${GITHUB_REF_NAME#v}"
+          if [[ "${pkg_version}" != "${tag_version}" ]]; then
+            echo "error: tag ${GITHUB_REF_NAME} does not match __version__ ${pkg_version}" >&2
+            exit 1
+          fi
+      - name: Build sdist and wheel
+        run: uv build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # required for PyPI trusted publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
