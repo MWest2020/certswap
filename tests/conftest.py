@@ -265,6 +265,23 @@ def separate_files_dir(pki: TestPKI, tmp_path: Path) -> Path:
 
 
 @pytest.fixture
+def cert_only_pem(pki: TestPKI, tmp_path: Path) -> Path:
+    """A fullchain without private key, as CAs deliver them."""
+    path = tmp_path / "fullchain-only.pem"
+    path.write_bytes(_pem_cert(pki.leaf_cert) + _pem_cert(pki.intermediate_cert))
+    return path
+
+
+@pytest.fixture
+def ca_delivery_dir(pki: TestPKI, tmp_path: Path) -> Path:
+    """A Sectigo-style delivery: ``<domain>.crt`` at top level, no key."""
+    d = tmp_path / "delivery"
+    d.mkdir()
+    (d / "example_com.crt").write_bytes(_pem_cert(pki.leaf_cert))
+    return d
+
+
+@pytest.fixture
 def zip_bundle(pki: TestPKI, tmp_path: Path) -> Path:
     bundle = (
         _pem_cert(pki.leaf_cert)

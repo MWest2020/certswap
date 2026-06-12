@@ -45,6 +45,10 @@ class ArgoApplicationView:
     self_heal: bool
     sync_options: tuple[str, ...]
     ignore_differences_count: int
+    # Set when another controller owns this Application (ApplicationSet
+    # ownerReference, or app-of-apps tracking label/annotation). Patches
+    # made by certswap would be reverted by that controller.
+    managed_by: str | None = None
 
 
 class K8sClient(Protocol):
@@ -54,9 +58,7 @@ class K8sClient(Protocol):
 
     def get_secret(self, namespace: str, name: str) -> SecretView | None: ...
 
-    def delete_secret(self, namespace: str, name: str) -> None: ...
-
-    def create_tls_secret(
+    def put_tls_secret(
         self, namespace: str, name: str, cert_pem: bytes, key_pem: bytes
     ) -> None: ...
 
@@ -76,7 +78,7 @@ class K8sClient(Protocol):
 
     def disable_argo_automated_sync(self, namespace: str, name: str) -> None: ...
 
-    def re_enable_argo_sync_no_selfheal(self, namespace: str, name: str) -> None: ...
+    def restore_argo_sync(self, namespace: str, name: str) -> None: ...
 
     def set_argo_respect_ignore_differences(
         self,
@@ -135,6 +137,31 @@ def _has_kubernetes_lib() -> bool:
 def assert_kubernetes_installed() -> None:
     if not _has_kubernetes_lib():  # pragma: no cover
         raise RuntimeError("`kubernetes` package not installed")
+
+
+def _leaf_fingerprint(pem_or_der: bytes) -> str | None:
+    """Hash the SubjectPublicKeyInfo of the first cert found in ``pem_or_der``.
+
+    The k8s secret may store PEM (fullchain) or DER. Either way we want
+    the SHA-256 of the leaf DER encoding so it matches ``CertBundle.fingerprint_sha256``.
+    """
+    import hashlib
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import serialization
+
+    try:
+        if pem_or_der.lstrip().startswith(b"-----BEGIN"):
+            certs = x509.load_pem_x509_certificates(pem_or_der)
+            if not certs:
+                return None
+            cert = certs[0]
+        else:
+            cert = x509.load_der_x509_certificate(pem_or_der)
+    except ValueError:
+        return None
+    der = cert.public_bytes(serialization.Encoding.DER)
+    return hashlib.sha256(der).hexdigest()
 
 
 def _coerce_dict(o: Any) -> dict[str, Any]:

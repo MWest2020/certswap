@@ -19,6 +19,8 @@ console = Console()
 
 def key_type(bundle: CertBundle) -> str:
     key = bundle.private_key
+    if key is None:
+        return "absent"
     if isinstance(key, rsa.RSAPrivateKey):
         return f"RSA {key.key_size}"
     if isinstance(key, ec.EllipticCurvePrivateKey):
@@ -34,7 +36,7 @@ def render_rich(
     bundle: CertBundle,
     *,
     chain_complete: bool,
-    key_ok: bool,
+    key_ok: bool | None,
     chain_verified: bool | None,
 ) -> None:
     src_label = f"{bundle.source_path} ({bundle.source_format.value}"
@@ -76,7 +78,12 @@ def render_rich(
     console.print(chain_table)
 
     key_table = Table(title="Key", show_header=False, box=None, pad_edge=False)
-    key_table.add_row("Matches leaf", "yes" if key_ok else "[red]NO[/red]")
+    if key_ok is None:
+        key_table.add_row(
+            "Matches leaf", "[yellow]no private key in bundle[/yellow]"
+        )
+    else:
+        key_table.add_row("Matches leaf", "yes" if key_ok else "[red]NO[/red]")
     if chain_verified is not None:
         key_table.add_row(
             "Verified against trust store",
@@ -89,7 +96,7 @@ def render_json(
     bundle: CertBundle,
     *,
     chain_complete: bool,
-    key_ok: bool,
+    key_ok: bool | None,
     chain_verified: bool | None,
 ) -> None:
     payload: dict[str, Any] = {

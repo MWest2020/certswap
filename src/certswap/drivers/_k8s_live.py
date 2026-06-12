@@ -7,7 +7,6 @@ stays import-cheap for tests that inject fakes.
 from __future__ import annotations
 
 import base64
-import hashlib
 
 from kubernetes import client as k8s_client
 from kubernetes import config as k8s_config
@@ -18,6 +17,7 @@ from certswap.drivers._k8s_client import (
     IngressView,
     K8sClient,
     SecretView,
+    _leaf_fingerprint,
 )
 from certswap.drivers._k8s_live_argo import ArgoMixin
 
@@ -72,16 +72,15 @@ class LiveK8sClient(ArgoMixin, K8sClient):
             fingerprint_sha256=fp,
         )
 
-    def delete_secret(self, namespace: str, name: str) -> None:
-        try:
-            self._core.delete_namespaced_secret(name=name, namespace=namespace)
-        except ApiException as exc:
-            if exc.status != 404:
-                raise
-
-    def create_tls_secret(
+    def put_tls_secret(
         self, namespace: str, name: str, cert_pem: bytes, key_pem: bytes
     ) -> None:
+        """Replace the secret in place; create it if absent.
+
+        A single PUT avoids the delete→create window in which consumers
+        would observe no secret at all. Only when the existing secret has
+        a different (immutable) type does this fall back to delete+create.
+        """
         body = k8s_client.V1Secret(
             metadata=k8s_client.V1ObjectMeta(name=name, namespace=namespace),
             type="kubernetes.io/tls",
@@ -90,6 +89,23 @@ class LiveK8sClient(ArgoMixin, K8sClient):
                 "tls.key": base64.b64encode(key_pem).decode("ascii"),
             },
         )
+        try:
+            self._core.replace_namespaced_secret(
+                name=name, namespace=namespace, body=body
+            )
+            return
+        except ApiException as exc:
+            if exc.status == 404:
+                self._core.create_namespaced_secret(namespace=namespace, body=body)
+                return
+            if exc.status not in (409, 422):
+                raise
+        # Existing secret has another type (the type field is immutable).
+        try:
+            self._core.delete_namespaced_secret(name=name, namespace=namespace)
+        except ApiException as exc:
+            if exc.status != 404:
+                raise
         self._core.create_namespaced_secret(namespace=namespace, body=body)
 
     def get_ingress(self, namespace: str, name: str) -> IngressView | None:
@@ -171,26 +187,3 @@ class LiveK8sClient(ArgoMixin, K8sClient):
         except ApiException as exc:
             if exc.status != 404:
                 raise
-
-
-def _leaf_fingerprint(pem_or_der: bytes) -> str | None:
-    """Hash the SubjectPublicKeyInfo of the first cert found in ``pem_or_der``.
-
-    The k8s secret may store PEM (fullchain) or DER. Either way we want
-    the SHA-256 of the leaf DER encoding so it matches ``CertBundle.fingerprint_sha256``.
-    """
-    from cryptography import x509
-    from cryptography.hazmat.primitives import serialization
-
-    try:
-        if pem_or_der.lstrip().startswith(b"-----BEGIN"):
-            certs = x509.load_pem_x509_certificates(pem_or_der)
-            if not certs:
-                return None
-            cert = certs[0]
-        else:
-            cert = x509.load_der_x509_certificate(pem_or_der)
-    except ValueError:
-        return None
-    der = cert.public_bytes(serialization.Encoding.DER)
-    return hashlib.sha256(der).hexdigest()

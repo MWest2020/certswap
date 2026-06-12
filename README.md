@@ -29,7 +29,7 @@ uv run ruff check . && uv run mypy src && uv run pytest
 ## Commands
 
 ```sh
-certswap inspect <bundle>                                # show bundle contents
+certswap inspect <bundle>                                # show bundle contents (key optional)
 certswap plan local   <bundle> --dest <dir>
 certswap apply local  <bundle> --dest <dir>
 certswap verify local --dest <dir>
@@ -54,18 +54,28 @@ that normally cost an afternoon and a postmortem:
 - Customers / CAs deliver bundles in random formats — `inspect` and
   `ingest` normalise PFX (incl. Sectigo's RC2-40-CBC legacy MAC, via
   `openssl pkcs12 -legacy` shell-out), PEM bundles, PKCS#7, archives,
-  and separate-file layouts to one canonical `CertBundle`.
+  and separate-file layouts to one canonical `CertBundle`. `inspect`
+  also accepts cert-only CA deliveries (no private key yet) — deployment
+  commands keep requiring the key.
 - Leaf-only bundles get AIA-walked into a complete chain
   (`--fetch-intermediates`).
 - Key↔cert mismatches and SAN/host mismatches are caught at `plan`,
   not at deployment.
 - On Kubernetes, `apply k8s` deletes the cert-manager Certificate that
   produced the secret and strips the
-  `cert-manager.io/cluster-issuer` annotation, then atomically swaps
-  the `kubernetes.io/tls` secret. With `--argocd-app`, the ArgoCD
-  Application is paused, `RespectIgnoreDifferences=true` is patched
-  in, and `selfHeal=false` stays set after sync resumes — because
-  `selfHeal` ignores `ignoreDifferences`.
+  `cert-manager.io/cluster-issuer` annotation, then replaces the
+  `kubernetes.io/tls` secret in place (a single PUT — no window in
+  which the secret is absent). With `--argocd-app`, the Application's
+  automated-sync policy is saved to an annotation and disabled,
+  `RespectIgnoreDifferences=true` and `ignoreDifferences` entries are
+  patched in (idempotently), and after the swap the saved policy is
+  restored with `selfHeal` forced off — because `selfHeal` ignores
+  `ignoreDifferences`. `prune` and the rest of the policy come back
+  exactly as they were; an app that wasn't auto-syncing stays that way.
+- Applications owned by an ApplicationSet or a parent app (app-of-apps)
+  are detected and block the plan: the owning controller would revert
+  certswap's patches, so the `ignoreDifferences` belongs in git there.
+  `--argocd-force-managed` overrides with a warning.
 - On a VM, `apply ssh` uses your `~/.ssh/config`, scp-uploads to a
   random `/tmp/` file, atomic-mv's into place, chmod/chown's, runs
   your reload command, post-checks, and restores backups on failure.

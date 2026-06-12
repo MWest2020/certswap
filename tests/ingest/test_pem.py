@@ -37,3 +37,22 @@ def test_parse_pem_rejects_no_key(tmp_path: Path, pem_bundle: Path) -> None:
 def test_ingest_dispatches_to_pem(pem_bundle: Path) -> None:
     cb = ingest(pem_bundle)
     assert cb.source_format == SourceFormat.PEM_BUNDLE
+
+
+def test_parse_pem_keyless_when_key_not_required(cert_only_pem: Path) -> None:
+    cb = parse_pem(cert_only_pem, require_key=False)
+    assert cb.private_key is None
+    assert cb.has_key() is False
+    assert cb.subject_cn() == "test.certswap.example"
+
+
+def test_keyless_bundle_refuses_key_serialization(cert_only_pem: Path) -> None:
+    cb = parse_pem(cert_only_pem, require_key=False)
+    with pytest.raises(ValueError, match="no private key"):
+        cb.to_pem_key()
+
+
+def test_ingest_keyless_pem(cert_only_pem: Path) -> None:
+    cb = ingest(cert_only_pem, require_key=False)
+    assert cb.private_key is None
+    assert cb.source_format == SourceFormat.PEM_BUNDLE

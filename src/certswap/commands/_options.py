@@ -30,6 +30,7 @@ def build_k8s_options(
     argocd_app: str | None = None,
     argocd_namespace: str = "argocd",
     argocd_wait_seconds: float | None = None,
+    argocd_force_managed: bool = False,
 ) -> dict[str, Any]:
     return {
         "namespace": namespace,
@@ -41,6 +42,7 @@ def build_k8s_options(
         "argocd_app": argocd_app,
         "argocd_namespace": argocd_namespace,
         "argocd_wait_seconds": argocd_wait_seconds,
+        "argocd_force_managed": argocd_force_managed,
     }
 
 

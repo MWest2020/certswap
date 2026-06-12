@@ -28,6 +28,7 @@ def ingest(
     key_path: Path | None = None,
     chain_path: Path | None = None,
     key_password: bytes | None = None,
+    require_key: bool = True,
 ) -> CertBundle:
     """Detect ``path``'s format and parse it into a CertBundle.
 
@@ -39,15 +40,18 @@ def ingest(
       ``separate`` and ``pkcs7`` formats.
     * ``key_password`` — password for the private key when distinct from
       the bundle password.
+    * ``require_key`` — when False, cert-only input parses into a keyless
+      bundle. Read-only flows (``inspect``) use this; deployment flows
+      must keep the default.
     """
     if path.is_dir():
-        return parse_directory(path, key_password or password)
+        return parse_directory(path, key_password or password, require_key=require_key)
 
     fmt = detect_format(path)
     effective_key_password = key_password if key_password is not None else password
 
     if fmt == SourceFormat.PEM_BUNDLE:
-        return parse_pem(path)
+        return parse_pem(path, require_key=require_key)
     if fmt == SourceFormat.PFX:
         try:
             return parse_pfx(path, password)
@@ -61,7 +65,7 @@ def ingest(
                     pass
             raise IngestError(f"could not parse {path} as PFX: {exc}") from exc
     if fmt == SourceFormat.PKCS7:
-        if key_path is None:
+        if key_path is None and require_key:
             raise IngestError(
                 f"PKCS#7 file {path} contains no private key; pass --key to ingest"
             )
@@ -77,10 +81,11 @@ def ingest(
                 key_path=key_path,
                 chain_path=chain_path,
                 key_password=key_password,
+                require_key=require_key,
             ),
         )
     if fmt == SourceFormat.SEPARATE_FILES:
-        if key_path is None:
+        if key_path is None and require_key:
             raise IngestError(
                 f"separate-files ingest of {path} needs an explicit --key"
             )

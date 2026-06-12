@@ -52,6 +52,14 @@ def plan_k8s(
     argocd_wait_seconds: Annotated[
         float, typer.Option("--argocd-wait", help="Seconds to wait before verify (apply only)")
     ] = 60.0,
+    argocd_force_managed: Annotated[
+        bool,
+        typer.Option(
+            "--argocd-force-managed",
+            help="Proceed even when the Application is owned by an "
+            "ApplicationSet or parent app (patches will be reverted)",
+        ),
+    ] = False,
     password_env: Annotated[str | None, typer.Option("--password-env")] = None,
     password_stdin: Annotated[bool, typer.Option("--password-stdin")] = False,
     key: Annotated[Path | None, typer.Option("--key", exists=True, readable=True)] = None,
@@ -73,6 +81,7 @@ def plan_k8s(
         argocd_app=argocd_app,
         argocd_namespace=argocd_namespace,
         argocd_wait_seconds=argocd_wait_seconds,
+        argocd_force_managed=argocd_force_managed,
     )
     ctx = TargetContext(
         driver="k8s",

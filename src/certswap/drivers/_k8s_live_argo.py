@@ -6,6 +6,7 @@ the base k8s logic can each fit under the 200-line file cap.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from kubernetes.client import ApiException
@@ -15,6 +16,30 @@ from certswap.drivers._k8s_client import ArgoApplicationView
 ARGO_GROUP = "argoproj.io"
 ARGO_VERSION = "v1alpha1"
 ARGO_PLURAL = "applications"
+
+# The pre-swap spec.syncPolicy.automated value, JSON-encoded ("null" when
+# the app was not auto-syncing). Stored on the Application itself so a
+# crashed swap can still be restored from cluster state alone.
+SAVED_SYNC_ANNOTATION = "certswap.io/saved-automated-sync"
+
+# Argo's default tracking label/annotation: present on an Application CR
+# that is itself deployed by another Argo app (app-of-apps).
+TRACKING_LABEL = "app.kubernetes.io/instance"
+TRACKING_ANNOTATION = "argocd.argoproj.io/tracking-id"
+
+
+def detect_managed_by(metadata: dict[str, Any]) -> str | None:
+    """Name the controller that owns this Application, if any."""
+    for ref in metadata.get("ownerReferences") or []:
+        if ref.get("kind") == "ApplicationSet":
+            return f"ApplicationSet {ref.get('name')}"
+    annotations = metadata.get("annotations") or {}
+    if TRACKING_ANNOTATION in annotations:
+        return f"Argo app-of-apps (tracking-id {annotations[TRACKING_ANNOTATION]!r})"
+    labels = metadata.get("labels") or {}
+    if TRACKING_LABEL in labels:
+        return f"Argo app-of-apps (instance label {labels[TRACKING_LABEL]!r})"
+    return None
 
 
 class ArgoMixin:
@@ -30,9 +55,7 @@ class ArgoMixin:
     # would otherwise refuse the real type.
     _cust: Any
 
-    def get_argo_application(
-        self, namespace: str, name: str
-    ) -> ArgoApplicationView | None:
+    def _get_argo_raw(self, namespace: str, name: str) -> dict[str, Any] | None:
         try:
             obj = self._cust.get_namespaced_custom_object(
                 group=ARGO_GROUP,
@@ -45,6 +68,14 @@ class ArgoMixin:
             if exc.status == 404:
                 return None
             raise
+        return dict(obj)
+
+    def get_argo_application(
+        self, namespace: str, name: str
+    ) -> ArgoApplicationView | None:
+        obj = self._get_argo_raw(namespace, name)
+        if obj is None:
+            return None
         spec = obj.get("spec") or {}
         automated = (spec.get("syncPolicy") or {}).get("automated") or {}
         return ArgoApplicationView(
@@ -54,16 +85,50 @@ class ArgoMixin:
             self_heal=bool(automated.get("selfHeal", False)),
             sync_options=tuple((spec.get("syncPolicy") or {}).get("syncOptions") or []),
             ignore_differences_count=len(spec.get("ignoreDifferences") or []),
+            managed_by=detect_managed_by(obj.get("metadata") or {}),
         )
 
     def disable_argo_automated_sync(self, namespace: str, name: str) -> None:
-        self._patch_argo(namespace, name, {"spec": {"syncPolicy": {"automated": None}}})
+        """Disable auto-sync, saving the current policy in an annotation.
 
-    def re_enable_argo_sync_no_selfheal(self, namespace: str, name: str) -> None:
+        An earlier saved annotation (crashed swap) is left untouched so
+        the oldest known-good policy wins on restore.
+        """
+        obj = self._get_argo_raw(namespace, name)
+        if obj is None:
+            raise RuntimeError(f"argocd Application {namespace}/{name} not found")
+        annotations = (obj.get("metadata") or {}).get("annotations") or {}
+        body: dict[str, Any] = {"spec": {"syncPolicy": {"automated": None}}}
+        if SAVED_SYNC_ANNOTATION not in annotations:
+            automated = ((obj.get("spec") or {}).get("syncPolicy") or {}).get("automated")
+            body["metadata"] = {
+                "annotations": {SAVED_SYNC_ANNOTATION: json.dumps(automated)}
+            }
+        self._patch_argo(namespace, name, body)
+
+    def restore_argo_sync(self, namespace: str, name: str) -> None:
+        """Restore the saved sync policy, forcing ``selfHeal=false``.
+
+        ``selfHeal`` stays off because Argo applies it without consulting
+        ``ignoreDifferences`` — re-enabling it would revert the swap. An
+        app that was not auto-syncing before stays that way.
+        """
+        obj = self._get_argo_raw(namespace, name)
+        if obj is None:
+            raise RuntimeError(f"argocd Application {namespace}/{name} not found")
+        annotations = (obj.get("metadata") or {}).get("annotations") or {}
+        raw = annotations.get(SAVED_SYNC_ANNOTATION)
+        if raw is None:
+            return  # nothing was saved; leave the Application as-is
+        saved = json.loads(raw)
+        automated = None if saved is None else {**saved, "selfHeal": False}
         self._patch_argo(
             namespace,
             name,
-            {"spec": {"syncPolicy": {"automated": {"prune": True, "selfHeal": False}}}},
+            {
+                "metadata": {"annotations": {SAVED_SYNC_ANNOTATION: None}},
+                "spec": {"syncPolicy": {"automated": automated}},
+            },
         )
 
     def set_argo_respect_ignore_differences(
@@ -73,24 +138,20 @@ class ArgoMixin:
         target_secret: str,
         target_ingress: str | None,
     ) -> None:
-        current = self._cust.get_namespaced_custom_object(
-            group=ARGO_GROUP,
-            version=ARGO_VERSION,
-            namespace=namespace,
-            plural=ARGO_PLURAL,
-            name=name,
-        )
-        spec = current.get("spec") or {}
+        obj = self._get_argo_raw(namespace, name)
+        if obj is None:
+            raise RuntimeError(f"argocd Application {namespace}/{name} not found")
+        spec = obj.get("spec") or {}
         sync_options = list((spec.get("syncPolicy") or {}).get("syncOptions") or [])
         if "RespectIgnoreDifferences=true" not in sync_options:
             sync_options.append("RespectIgnoreDifferences=true")
 
         ignore_diffs = list(spec.get("ignoreDifferences") or [])
-        ignore_diffs.append(
+        wanted: list[dict[str, Any]] = [
             {"group": "", "kind": "Secret", "name": target_secret, "jsonPointers": ["/data"]}
-        )
+        ]
         if target_ingress is not None:
-            ignore_diffs.append(
+            wanted.append(
                 {
                     "group": "networking.k8s.io",
                     "kind": "Ingress",
@@ -98,6 +159,8 @@ class ArgoMixin:
                     "jsonPointers": ["/metadata/annotations"],
                 }
             )
+        # Idempotent: repeated swaps must not accumulate duplicate entries.
+        ignore_diffs.extend(e for e in wanted if e not in ignore_diffs)
         self._patch_argo(
             namespace,
             name,

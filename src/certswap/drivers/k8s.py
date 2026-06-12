@@ -66,7 +66,7 @@ class K8sDriver:
             PlanStep(
                 description=f"replace secret {opts.namespace}/{opts.secret}",
                 before=_describe_secret(existing),
-                would_do="delete + create kubernetes.io/tls secret",
+                would_do="replace kubernetes.io/tls secret in place (create if absent)",
             )
         )
 
@@ -149,13 +149,8 @@ class K8sDriver:
 
         _step(
             result,
-            f"delete secret {opts.secret}",
-            lambda: client.delete_secret(opts.namespace, opts.secret),
-        )
-        _step(
-            result,
-            f"create secret {opts.secret}",
-            lambda: client.create_tls_secret(
+            f"replace secret {opts.secret}",
+            lambda: client.put_tls_secret(
                 opts.namespace, opts.secret, bundle.to_pem_fullchain(), bundle.to_pem_key()
             ),
         )

@@ -74,13 +74,19 @@ def inspect_command(
 ) -> None:
     """Show the contents of a TLS bundle without performing any target work."""
     password = resolve_password(password_env, password_stdin)
-    bundle = load_bundle(bundle_path, password=password, key=key, chain=chain)
+    # Inspection is read-only, so a cert-only CA delivery is fine here;
+    # plan/apply keep requiring the key.
+    bundle = load_bundle(
+        bundle_path, password=password, key=key, chain=chain, require_key=False
+    )
 
     if fetch_intermediates:
         bundle = complete_chain(bundle, fetch=True)
 
     chain_complete = chain_is_complete(bundle.chain)
-    key_ok = key_matches_cert(bundle.private_key, bundle.leaf)
+    key_ok: bool | None = None
+    if bundle.private_key is not None:
+        key_ok = key_matches_cert(bundle.private_key, bundle.leaf)
 
     chain_verified: bool | None = None
     if trust_store is not None or _trust_store_available():
@@ -95,5 +101,5 @@ def inspect_command(
         chain_verified=chain_verified,
     )
 
-    if not key_ok:
+    if key_ok is False:
         raise typer.Exit(code=10)

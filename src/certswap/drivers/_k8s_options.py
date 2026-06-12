@@ -19,6 +19,7 @@ class K8sOptions:
     argocd_app: str | None
     argocd_namespace: str
     argocd_wait_seconds: float
+    argocd_force_managed: bool
 
     @classmethod
     def from_context(cls, ctx: TargetContext) -> K8sOptions:
@@ -42,4 +43,5 @@ class K8sOptions:
                 if o.get("argocd_wait_seconds") is None
                 else float(o["argocd_wait_seconds"])
             ),
+            argocd_force_managed=bool(o.get("argocd_force_managed", False)),
         )

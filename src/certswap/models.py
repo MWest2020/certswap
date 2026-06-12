@@ -80,12 +80,16 @@ class CertBundle(BaseModel):
     """Canonical internal representation of an ingested TLS bundle.
 
     Ordering invariant: ``chain`` is leaf→root and EXCLUDES ``leaf``.
+
+    ``private_key`` may be None for read-only flows (``inspect`` of a
+    cert-only CA delivery). Deployment flows require a key; ``to_pem_key``
+    raises when it is absent.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     leaf: X509Cert
-    private_key: PrivateKey
+    private_key: PrivateKey | None
     chain: list[X509Cert]
     source_format: SourceFormat
     source_path: Path
@@ -133,7 +137,15 @@ class CertBundle(BaseModel):
         parts = [self.leaf, *self.chain]
         return b"".join(c.public_bytes(serialization.Encoding.PEM) for c in parts)
 
+    def has_key(self) -> bool:
+        return self.private_key is not None
+
     def to_pem_key(self) -> bytes:
+        if self.private_key is None:
+            raise ValueError(
+                f"bundle from {self.source_path} has no private key; "
+                "deployment requires one (pass --key)"
+            )
         return self.private_key.private_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PrivateFormat.PKCS8,
@@ -148,5 +160,6 @@ class CertBundle(BaseModel):
         """
         h = hashlib.sha256()
         h.update(self.to_pem_fullchain())
-        h.update(self.to_pem_key())
+        if self.private_key is not None:
+            h.update(self.to_pem_key())
         return h.hexdigest()

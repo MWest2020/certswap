@@ -40,20 +40,29 @@ def parse_pkcs7_certs(path: Path) -> list[bytes]:
 
 
 def parse_pkcs7_bundle(
-    path: Path, *, key_path: Path, key_password: bytes | None
+    path: Path, *, key_path: Path | None, key_password: bytes | None
 ) -> CertBundle:
-    """Combine a PKCS#7 cert blob with an external private key file."""
+    """Combine a PKCS#7 cert blob with an external private key file.
+
+    ``key_path=None`` yields a keyless bundle (inspection only).
+    """
     data = path.read_bytes()
     certs = _load_certs(data, path)
     if not certs:
         raise Pkcs7ParseError(f"PKCS#7 file at {path} contained no certificates")
     leaf, chain = _pick_leaf(certs)
 
-    key_bytes = key_path.read_bytes()
-    if key_bytes.lstrip().startswith(b"-----BEGIN"):
-        private_key = serialization.load_pem_private_key(key_bytes, password=key_password)
-    else:
-        private_key = serialization.load_der_private_key(key_bytes, password=key_password)
+    private_key = None
+    if key_path is not None:
+        key_bytes = key_path.read_bytes()
+        if key_bytes.lstrip().startswith(b"-----BEGIN"):
+            private_key = serialization.load_pem_private_key(
+                key_bytes, password=key_password
+            )
+        else:
+            private_key = serialization.load_der_private_key(
+                key_bytes, password=key_password
+            )
 
     return CertBundle(
         leaf=leaf,

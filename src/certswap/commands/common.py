@@ -49,6 +49,7 @@ def load_bundle(
     password: bytes | None,
     key: Path | None,
     chain: Path | None,
+    require_key: bool = True,
 ) -> CertBundle:
     try:
         return ingest(
@@ -56,6 +57,7 @@ def load_bundle(
             password=password,
             key_path=key,
             chain_path=chain,
+            require_key=require_key,
         )
     except (IngestError, ValueError) as exc:
         typer.echo(f"ingest failed: {exc}", err=True)

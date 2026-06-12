@@ -40,6 +40,16 @@ def _first_existing(directory: Path, names: tuple[str, ...]) -> Path | None:
     return None
 
 
+def _glob_single_cert(directory: Path) -> Path | None:
+    """Fallback leaf detection: exactly one ``*.crt``/``*.pem`` at top level.
+
+    CA deliveries typically name the leaf ``<domain>.crt``; only an
+    unambiguous single match is accepted.
+    """
+    hits = [p for ext in ("*.crt", "*.pem") for p in sorted(directory.glob(ext))]
+    return hits[0] if len(hits) == 1 else None
+
+
 def _load_certs_from_file(path: Path) -> list[x509.Certificate]:
     data = path.read_bytes()
     blocks = _split_pem_blocks(data)
@@ -60,18 +70,21 @@ def _load_key(path: Path, password: bytes | None) -> PrivateKeyTypes:
 def parse_separate(
     *,
     cert_path: Path,
-    key_path: Path,
+    key_path: Path | None,
     chain_path: Path | None,
     key_password: bytes | None,
 ) -> CertBundle:
-    """Combine an explicit cert + key (+ optional chain) into a CertBundle."""
+    """Combine an explicit cert + key (+ optional chain) into a CertBundle.
+
+    ``key_path=None`` yields a keyless bundle (inspection only).
+    """
     certs = _load_certs_from_file(cert_path)
     if not certs:
         raise SeparateFilesError(f"no certificates in {cert_path}")
     if chain_path is not None:
         certs.extend(_load_certs_from_file(chain_path))
     leaf, chain = _pick_leaf(certs)
-    key = _load_key(key_path, key_password)
+    key = _load_key(key_path, key_password) if key_path is not None else None
 
     return CertBundle(
         leaf=leaf,
@@ -83,18 +96,22 @@ def parse_separate(
     )
 
 
-def parse_directory(directory: Path, key_password: bytes | None) -> CertBundle:
+def parse_directory(
+    directory: Path, key_password: bytes | None, *, require_key: bool = True
+) -> CertBundle:
     """Detect leaf/key/chain inside ``directory`` by common filenames."""
     if not directory.is_dir():
         raise SeparateFilesError(f"not a directory: {directory}")
-    cert_path = _first_existing(directory, _LEAF_CANDIDATES)
+    cert_path = _first_existing(directory, _LEAF_CANDIDATES) or _glob_single_cert(
+        directory
+    )
     key_path = _first_existing(directory, _KEY_CANDIDATES)
     if cert_path is None:
         raise SeparateFilesError(
             f"no leaf certificate found in {directory}; "
             f"tried {', '.join(_LEAF_CANDIDATES)}"
         )
-    if key_path is None:
+    if key_path is None and require_key:
         raise SeparateFilesError(
             f"no private key found in {directory}; "
             f"tried {', '.join(_KEY_CANDIDATES)}"

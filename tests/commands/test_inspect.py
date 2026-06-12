@@ -18,6 +18,20 @@ def test_inspect_pem_rich_output(pem_bundle: Path) -> None:
     assert "SHA256:" in result.output
 
 
+def test_inspect_cert_only_delivery_succeeds(ca_delivery_dir: Path) -> None:
+    result = runner.invoke(app, ["inspect", str(ca_delivery_dir)])
+    assert result.exit_code == 0, result.output
+    assert "no private key" in result.output
+
+
+def test_inspect_cert_only_json_reports_null_key_match(cert_only_pem: Path) -> None:
+    result = runner.invoke(app, ["inspect", str(cert_only_pem), "--json"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["validation"]["key_matches_leaf"] is None
+    assert payload["leaf"]["key_type"] == "absent"
+
+
 def test_inspect_pem_json_output(pem_bundle: Path) -> None:
     result = runner.invoke(app, ["inspect", str(pem_bundle), "--json"])
     assert result.exit_code == 0, result.output

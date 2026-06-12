@@ -65,8 +65,12 @@ def _pick_leaf(certs: list[x509.Certificate]) -> tuple[x509.Certificate, list[x5
     return leaf, rest
 
 
-def parse_pem(path: Path) -> CertBundle:
-    """Parse a PEM bundle file containing at least a cert and a private key."""
+def parse_pem(path: Path, *, require_key: bool = True) -> CertBundle:
+    """Parse a PEM bundle file containing at least a cert and a private key.
+
+    With ``require_key=False`` a cert-only file (e.g. a CA-delivered
+    fullchain) parses into a keyless bundle, usable for inspection only.
+    """
     data = path.read_bytes()
     blocks = _split_pem_blocks(data)
     if not blocks:
@@ -82,7 +86,7 @@ def parse_pem(path: Path) -> CertBundle:
                 raise PemParseError(f"multiple private keys in {path}")
             private_key = serialization.load_pem_private_key(block, password=None)
 
-    if private_key is None:
+    if private_key is None and require_key:
         raise PemParseError(f"no private key in {path}")
     leaf, rest = _pick_leaf(certs)
 
