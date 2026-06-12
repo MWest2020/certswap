@@ -66,6 +66,10 @@ class K8sClient(Protocol):
 
     def strip_ingress_cert_manager_annotation(self, namespace: str, name: str) -> bool: ...
 
+    def ensure_ingress_host(
+        self, namespace: str, name: str, host: str, secret_name: str
+    ) -> bool: ...
+
     def find_certificate_for_secret(
         self, namespace: str, secret_name: str
     ) -> CertificateView | None: ...
@@ -86,6 +90,7 @@ class K8sClient(Protocol):
         name: str,
         target_secret: str,
         target_ingress: str | None,
+        ingress_spec: bool = False,
     ) -> None: ...
 
 

@@ -12,8 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from certswap.core.validation import san_matches_host
-from certswap.drivers import _k8s_argo
+from certswap.drivers import _k8s_argo, _k8s_ingress
 from certswap.drivers._k8s_apply import record_step as _step
 from certswap.drivers._k8s_client import (
     ClusterContextMismatch,
@@ -86,39 +85,11 @@ class K8sDriver:
                 "--keep-cert-manager set; it will overwrite this secret on reconcile"
             )
 
-        if opts.ingress and not self._annotate_ingress_plan(plan, bundle, opts, client):
+        if opts.ingress and not _k8s_ingress.annotate_plan(plan, bundle, opts, client):
             return plan
         if not _k8s_argo.annotate_plan(plan, opts, client):
             return plan
         return plan
-
-    def _annotate_ingress_plan(
-        self, plan: Plan, bundle: CertBundle, opts: K8sOptions, client: K8sClient
-    ) -> bool:
-        # Caller guarantees opts.ingress is set.
-        ingress_name = opts.ingress or ""
-        ingress = client.get_ingress(opts.namespace, ingress_name)
-        if ingress is None:
-            plan.blockers.append(f"ingress {opts.namespace}/{ingress_name} not found")
-            return False
-        if not opts.allow_host_mismatch:
-            mismatched = [h for h in ingress.hosts if not san_matches_host(bundle, h)]
-            if mismatched:
-                plan.blockers.append(
-                    f"ingress hosts {mismatched} not covered by leaf SANs "
-                    f"{bundle.sans()}; pass --allow-host-mismatch to override"
-                )
-                return False
-        if ingress.cert_manager_annotation and not opts.keep_cert_manager:
-            plan.steps.insert(
-                0,
-                PlanStep(
-                    description=f"strip Ingress annotation on {ingress.name}",
-                    before=f"cert-manager annotation={ingress.cert_manager_annotation}",
-                    would_do="remove cert-manager.io/cluster-issuer annotation",
-                ),
-            )
-        return True
 
     def apply(self, bundle: CertBundle, ctx: TargetContext) -> ApplyResult:
         opts = K8sOptions.from_context(ctx)
@@ -128,6 +99,15 @@ class K8sDriver:
             verify_context(client, opts.context)
 
         _k8s_argo.apply_pre(result, opts, client, record_step=_step)
+
+        if opts.ingress and opts.ingress_host:
+            _step(
+                result,
+                f"add host {opts.ingress_host} to ingress {opts.ingress}",
+                lambda: client.ensure_ingress_host(
+                    opts.namespace, opts.ingress or "", opts.ingress_host or "", opts.secret
+                ),
+            )
 
         if opts.ingress and not opts.keep_cert_manager:
             _step(

@@ -2,6 +2,37 @@
 
 All notable changes to certswap. Dates are ISO (YYYY-MM-DD).
 
+## [0.3.0] — 2026-06-12
+
+### Added
+- **`--ingress-host`** (plan/apply k8s, requires `--ingress`): attach a
+  new host to an existing ingress — rule (backend copied from the first
+  rule) + TLS entry for `--secret`, idempotently. Built for the
+  "customer vanity domain with an externally delivered cert on a shared
+  GitOps cluster" workflow, replacing the error-prone manual
+  edit-ingress-plus-ignoreDifferences procedure. Behavior:
+  - SAN validation applies to the **new host only**; existing hosts on a
+    shared ingress keep their own TLS entries.
+  - Blocked in combination with `--keep-cert-manager`: ingress-shim
+    issues a certificate for every TLS entry on an annotated ingress and
+    would overwrite the swapped secret.
+  - The annotation strip warns which other hosts lose automatic LE
+    renewal (move them to a separate annotated ingress, e.g. a redirect
+    ingress, before their certs expire).
+  - With `--argocd-app`, the ingress `ignoreDifferences` entry covers
+    `/spec` as well as `/metadata/annotations` (entries merged by
+    resource identity, pointers unioned). Documented trade-off:
+    chart-side ingress changes stop propagating until the entry is
+    removed.
+  - `verify` gains an "ingress serves host" check.
+- New modules to honor the 200-line cap: `drivers/_k8s_ingress.py`
+  (ingress planning), `drivers/_k8s_live_ingress.py` (live ingress
+  mutations), `drivers/_k8s_argo_meta.py` (pure Argo helpers).
+
+### Tests
+- 118 tests (was 112): host-attach plan/apply/verify, SAN scoping,
+  keep-cert-manager conflict, ignoreDifferences pointer merging.
+
 ## [0.2.0] — 2026-06-12
 
 ### Added (packaging / community release)

@@ -11,11 +11,8 @@ import copy
 import json
 from typing import Any
 
-from certswap.drivers._k8s_live_argo import (
-    SAVED_SYNC_ANNOTATION,
-    ArgoMixin,
-    detect_managed_by,
-)
+from certswap.drivers._k8s_argo_meta import detect_managed_by
+from certswap.drivers._k8s_live_argo import SAVED_SYNC_ANNOTATION, ArgoMixin
 
 
 def _merge(target: dict[str, Any], patch: dict[str, Any]) -> None:
@@ -131,6 +128,19 @@ def test_respect_ignore_differences_preserves_existing_entries() -> None:
         "RespectIgnoreDifferences=true",
     ]
     assert len(spec["ignoreDifferences"]) == 2
+
+
+def test_respect_ignore_differences_ingress_spec_pointer_merges() -> None:
+    client = Client(_app({"prune": True}))
+    # First a plain swap (annotations only), then one that touched the spec.
+    client.set_argo_respect_ignore_differences("argocd", "my-app", "tls-cert", "app")
+    client.set_argo_respect_ignore_differences(
+        "argocd", "my-app", "tls-cert", "app", ingress_spec=True
+    )
+    spec = client._cust.obj["spec"]
+    ingress_entries = [e for e in spec["ignoreDifferences"] if e["kind"] == "Ingress"]
+    assert len(ingress_entries) == 1
+    assert ingress_entries[0]["jsonPointers"] == ["/metadata/annotations", "/spec"]
 
 
 def test_detect_managed_by_applicationset_owner() -> None:

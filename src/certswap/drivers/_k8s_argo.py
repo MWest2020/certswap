@@ -105,6 +105,8 @@ def apply_pre(
             opts.argocd_app or "",
             target_secret=opts.secret,
             target_ingress=opts.ingress,
+            # Host additions modify the ingress spec; protect it too.
+            ingress_spec=bool(opts.ingress_host),
         ),
     )
 

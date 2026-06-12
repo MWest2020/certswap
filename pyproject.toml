@@ -1,6 +1,6 @@
 [project]
 name = "certswap"
-version = "0.2.0"
+version = "0.3.0"
 description = "Deterministic TLS bundle swap CLI: ingest any cert format, deploy to k8s/ssh/local/proxmox with validation, evidence, and ArgoCD-safe swaps."
 readme = "README.md"
 license = "EUPL-1.2"

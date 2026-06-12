@@ -43,18 +43,29 @@ def build_verify_result(
         if ingress is None:
             checks.append(CheckResult(name=f"ingress {opts.ingress} present", ok=False))
             all_ok = False
-        elif not opts.keep_cert_manager:
-            annot_ok = ingress.cert_manager_annotation is None
-            checks.append(
-                CheckResult(
-                    name="ingress free of cert-manager.io/cluster-issuer",
-                    ok=annot_ok,
-                    detail=None
-                    if annot_ok
-                    else f"annotation back: {ingress.cert_manager_annotation}",
+        else:
+            if opts.ingress_host:
+                host_ok = opts.ingress_host in ingress.hosts
+                checks.append(
+                    CheckResult(
+                        name=f"ingress serves host {opts.ingress_host}",
+                        ok=host_ok,
+                        detail=None if host_ok else f"hosts on ingress: {ingress.hosts}",
+                    )
                 )
-            )
-            all_ok = all_ok and annot_ok
+                all_ok = all_ok and host_ok
+            if not opts.keep_cert_manager:
+                annot_ok = ingress.cert_manager_annotation is None
+                checks.append(
+                    CheckResult(
+                        name="ingress free of cert-manager.io/cluster-issuer",
+                        ok=annot_ok,
+                        detail=None
+                        if annot_ok
+                        else f"annotation back: {ingress.cert_manager_annotation}",
+                    )
+                )
+                all_ok = all_ok and annot_ok
 
     if not opts.keep_cert_manager:
         cert = client.find_certificate_for_secret(opts.namespace, opts.secret)

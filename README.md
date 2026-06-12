@@ -46,6 +46,7 @@ certswap plan ssh     <bundle> --host <h> --cert-dest /etc/nginx/tls/x.pem --key
 certswap apply ssh    <bundle> --host <h> --cert-dest ... --key-dest ... --reload "nginx -s reload"
 certswap plan k8s     <bundle> --namespace ns --secret tls --context homelab --ingress app
 certswap apply k8s    <bundle> --namespace ns --secret tls --argocd-app my-app
+certswap apply k8s    <bundle> --namespace ns --secret tls --ingress app --ingress-host www.example.org --argocd-app my-app
 certswap apply proxmox <bundle> --host pve-node
 certswap upcoming --within-days 60
 ```
@@ -85,6 +86,14 @@ that normally cost an afternoon and a postmortem:
   are detected and block the plan: the owning controller would revert
   certswap's patches, so the `ignoreDifferences` belongs in git there.
   `--argocd-force-managed` overrides with a warning.
+- `--ingress-host` attaches a new host (rule + TLS entry) to an existing
+  ingress — the "customer domain with externally delivered cert on a
+  shared GitOps cluster" case. The cert-manager annotation is stripped
+  (ingress-shim would otherwise overwrite the swapped secret; the plan
+  warns which other hosts lose automatic renewal), and with
+  `--argocd-app` the ingress `/spec` is protected via
+  `ignoreDifferences`. Note: chart-side ingress changes stop syncing
+  until that entry is removed.
 - On a VM, `apply ssh` uses your `~/.ssh/config`, scp-uploads to a
   random `/tmp/` file, atomic-mv's into place, chmod/chown's, runs
   your reload command, post-checks, and restores backups on failure.

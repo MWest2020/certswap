@@ -28,6 +28,15 @@ def plan_k8s(
         str | None,
         typer.Option("--ingress", help="Ingress to strip cert-manager annotation from"),
     ] = None,
+    ingress_host: Annotated[
+        str | None,
+        typer.Option(
+            "--ingress-host",
+            help="Add this host (rule + TLS entry for --secret) to the "
+            "--ingress; with --argocd-app the ingress spec is protected "
+            "via ignoreDifferences",
+        ),
+    ] = None,
     keep_cert_manager: Annotated[
         bool,
         typer.Option(
@@ -76,6 +85,7 @@ def plan_k8s(
         secret=secret,
         context=context,
         ingress=ingress,
+        ingress_host=ingress_host,
         keep_cert_manager=keep_cert_manager,
         allow_host_mismatch=allow_host_mismatch,
         argocd_app=argocd_app,

@@ -11,6 +11,7 @@ from typing import Any
 
 from kubernetes.client import ApiException
 
+from certswap.drivers._k8s_argo_meta import detect_managed_by, merge_ignore_entry
 from certswap.drivers._k8s_client import ArgoApplicationView
 
 ARGO_GROUP = "argoproj.io"
@@ -21,25 +22,6 @@ ARGO_PLURAL = "applications"
 # the app was not auto-syncing). Stored on the Application itself so a
 # crashed swap can still be restored from cluster state alone.
 SAVED_SYNC_ANNOTATION = "certswap.io/saved-automated-sync"
-
-# Argo's default tracking label/annotation: present on an Application CR
-# that is itself deployed by another Argo app (app-of-apps).
-TRACKING_LABEL = "app.kubernetes.io/instance"
-TRACKING_ANNOTATION = "argocd.argoproj.io/tracking-id"
-
-
-def detect_managed_by(metadata: dict[str, Any]) -> str | None:
-    """Name the controller that owns this Application, if any."""
-    for ref in metadata.get("ownerReferences") or []:
-        if ref.get("kind") == "ApplicationSet":
-            return f"ApplicationSet {ref.get('name')}"
-    annotations = metadata.get("annotations") or {}
-    if TRACKING_ANNOTATION in annotations:
-        return f"Argo app-of-apps (tracking-id {annotations[TRACKING_ANNOTATION]!r})"
-    labels = metadata.get("labels") or {}
-    if TRACKING_LABEL in labels:
-        return f"Argo app-of-apps (instance label {labels[TRACKING_LABEL]!r})"
-    return None
 
 
 class ArgoMixin:
@@ -137,6 +119,7 @@ class ArgoMixin:
         name: str,
         target_secret: str,
         target_ingress: str | None,
+        ingress_spec: bool = False,
     ) -> None:
         obj = self._get_argo_raw(namespace, name)
         if obj is None:
@@ -151,16 +134,23 @@ class ArgoMixin:
             {"group": "", "kind": "Secret", "name": target_secret, "jsonPointers": ["/data"]}
         ]
         if target_ingress is not None:
+            pointers = ["/metadata/annotations"]
+            if ingress_spec:
+                # The swap added a host/TLS entry to the ingress spec;
+                # protect it from being synced away. NOTE: chart-side
+                # ingress changes stop propagating until this entry is
+                # removed again.
+                pointers.append("/spec")
             wanted.append(
                 {
                     "group": "networking.k8s.io",
                     "kind": "Ingress",
                     "name": target_ingress,
-                    "jsonPointers": ["/metadata/annotations"],
+                    "jsonPointers": pointers,
                 }
             )
-        # Idempotent: repeated swaps must not accumulate duplicate entries.
-        ignore_diffs.extend(e for e in wanted if e not in ignore_diffs)
+        for entry in wanted:
+            merge_ignore_entry(ignore_diffs, entry)
         self._patch_argo(
             namespace,
             name,

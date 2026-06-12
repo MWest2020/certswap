@@ -14,6 +14,7 @@ class K8sOptions:
     secret: str
     context: str | None
     ingress: str | None
+    ingress_host: str | None
     keep_cert_manager: bool
     allow_host_mismatch: bool
     argocd_app: str | None
@@ -28,11 +29,14 @@ class K8sOptions:
         secret = o.get("secret")
         if not ns or not secret:
             raise ValueError("k8s driver requires `namespace` and `secret`")
+        if o.get("ingress_host") and not o.get("ingress"):
+            raise ValueError("`ingress_host` requires `ingress`")
         return cls(
             namespace=str(ns),
             secret=str(secret),
             context=str(o["context"]) if o.get("context") else None,
             ingress=str(o["ingress"]) if o.get("ingress") else None,
+            ingress_host=str(o["ingress_host"]) if o.get("ingress_host") else None,
             keep_cert_manager=bool(o.get("keep_cert_manager", False)),
             allow_host_mismatch=bool(o.get("allow_host_mismatch", False)),
             argocd_app=str(o["argocd_app"]) if o.get("argocd_app") else None,

@@ -60,6 +60,25 @@ class FakeK8s(K8sClient):
     def get_ingress(self, namespace: str, name: str) -> IngressView | None:
         return self.ingresses.get((namespace, name))
 
+    added_hosts: list[tuple[str, str, str, str]] = field(default_factory=list)
+
+    def ensure_ingress_host(
+        self, namespace: str, name: str, host: str, secret_name: str
+    ) -> bool:
+        self.added_hosts.append((namespace, name, host, secret_name))
+        existing = self.ingresses.get((namespace, name))
+        if existing is None:
+            raise RuntimeError(f"ingress {namespace}/{name} not found")
+        if host in existing.hosts:
+            return False
+        self.ingresses[(namespace, name)] = IngressView(
+            name=existing.name,
+            namespace=existing.namespace,
+            hosts=[*existing.hosts, host],
+            cert_manager_annotation=existing.cert_manager_annotation,
+        )
+        return True
+
     def strip_ingress_cert_manager_annotation(self, namespace: str, name: str) -> bool:
         self.stripped_annotations.append((namespace, name))
         existing = self.ingresses.get((namespace, name))
@@ -95,6 +114,7 @@ class FakeK8s(K8sClient):
     argo_disabled: list[tuple[str, str]] = field(default_factory=list)
     argo_respected: list[tuple[str, str, str, str | None]] = field(default_factory=list)
     argo_restored: list[tuple[str, str]] = field(default_factory=list)
+    argo_ingress_spec_protected: bool = False
 
     def get_argo_application(
         self, namespace: str, name: str
@@ -133,8 +153,10 @@ class FakeK8s(K8sClient):
         name: str,
         target_secret: str,
         target_ingress: str | None,
+        ingress_spec: bool = False,
     ) -> None:
         self.argo_respected.append((namespace, name, target_secret, target_ingress))
+        self.argo_ingress_spec_protected = ingress_spec
         existing = self.argo_apps.get((namespace, name))
         if existing is not None:
             opts = (*existing.sync_options, "RespectIgnoreDifferences=true")
@@ -428,6 +450,96 @@ def test_argo_plan_allows_managed_application_with_force_flag(pem_bundle: Path) 
     plan = driver.plan(cb, _ctx(argocd_app="my-app", argocd_force_managed=True))
     assert plan.blockers == []
     assert any("revert" in w for w in plan.warnings)
+
+
+# -------- ingress host-attach tests (--ingress-host) --------
+
+
+def _shared_ingress() -> IngressView:
+    """An LE-annotated ingress serving another tenant host."""
+    return IngressView(
+        name="app",
+        namespace="homelab",
+        hosts=["existing.example.org"],
+        cert_manager_annotation="letsencrypt-prod",
+    )
+
+
+def test_ingress_host_plan_skips_san_check_for_existing_hosts(pem_bundle: Path) -> None:
+    fake = FakeK8s()
+    fake.ingresses[("homelab", "app")] = _shared_ingress()
+    driver = K8sDriver(client_factory=lambda _c: fake)
+    cb = parse_pem(pem_bundle)
+    # existing.example.org does NOT match the bundle SANs, but only the
+    # new host must match when --ingress-host is used.
+    plan = driver.plan(cb, _ctx(ingress="app", ingress_host="test.certswap.example"))
+    assert plan.blockers == []
+    descs = [s.description for s in plan.steps]
+    assert any("add host test.certswap.example" in d for d in descs)
+    assert any("strip Ingress annotation" in d for d in descs)
+    assert any("renewal" in w for w in plan.warnings)
+
+
+def test_ingress_host_plan_blocks_on_san_mismatch_of_new_host(pem_bundle: Path) -> None:
+    fake = FakeK8s()
+    fake.ingresses[("homelab", "app")] = _shared_ingress()
+    driver = K8sDriver(client_factory=lambda _c: fake)
+    cb = parse_pem(pem_bundle)
+    plan = driver.plan(cb, _ctx(ingress="app", ingress_host="wrong.example.org"))
+    assert plan.is_blocked
+    assert any("wrong.example.org" in b for b in plan.blockers)
+
+
+def test_ingress_host_plan_blocks_with_keep_cert_manager(pem_bundle: Path) -> None:
+    fake = FakeK8s()
+    fake.ingresses[("homelab", "app")] = _shared_ingress()
+    driver = K8sDriver(client_factory=lambda _c: fake)
+    cb = parse_pem(pem_bundle)
+    plan = driver.plan(
+        cb,
+        _ctx(ingress="app", ingress_host="test.certswap.example", keep_cert_manager=True),
+    )
+    assert plan.is_blocked
+    assert any("ingress-shim" in b for b in plan.blockers)
+
+
+def test_ingress_host_apply_adds_host_then_strips_then_swaps(pem_bundle: Path) -> None:
+    fake = FakeK8s()
+    fake.ingresses[("homelab", "app")] = _shared_ingress()
+    fake.argo_apps[("argocd", "my-app")] = _argo_app()
+    driver = K8sDriver(client_factory=lambda _c: fake)
+    cb = parse_pem(pem_bundle)
+    fake.next_created_fingerprint = cb.fingerprint_sha256()
+
+    result = driver.apply(
+        cb,
+        _ctx(
+            ingress="app",
+            ingress_host="test.certswap.example",
+            argocd_app="my-app",
+            argocd_wait_seconds=0,
+        ),
+    )
+    assert result.exit_code == 0, result.model_dump()
+    assert fake.added_hosts == [("homelab", "app", "test.certswap.example", "tls-cert")]
+    descs = [s.description for s in result.steps]
+    add_idx = next(i for i, d in enumerate(descs) if "add host" in d)
+    strip_idx = next(i for i, d in enumerate(descs) if "strip ingress annotation" in d)
+    replace_idx = next(i for i, d in enumerate(descs) if "replace secret" in d)
+    assert add_idx < strip_idx < replace_idx
+    # The Argo ignoreDifferences must protect the ingress spec too.
+    assert fake.argo_ingress_spec_protected is True
+    # And the verify must confirm the host is served.
+    assert result.verify is not None
+    assert any("serves host" in c.name and c.ok for c in result.verify.checks)
+
+
+def test_ingress_host_requires_ingress_option() -> None:
+    from certswap.drivers._k8s_options import K8sOptions
+
+    ctx = _ctx(ingress_host="x.example.org")
+    with pytest.raises(ValueError, match="requires `ingress`"):
+        K8sOptions.from_context(ctx)
 
 
 def test_argo_verify_fails_if_selfheal_back_on(pem_bundle: Path) -> None:

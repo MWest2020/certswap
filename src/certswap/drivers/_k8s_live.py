@@ -20,15 +20,18 @@ from certswap.drivers._k8s_client import (
     _leaf_fingerprint,
 )
 from certswap.drivers._k8s_live_argo import ArgoMixin
+from certswap.drivers._k8s_live_ingress import (
+    CERT_MANAGER_ANNOTATION,
+    CERT_MANAGER_ANNOTATION_ISSUER,
+    IngressMixin,
+)
 
 CERT_MANAGER_GROUP = "cert-manager.io"
 CERT_MANAGER_VERSION = "v1"
 CERT_MANAGER_PLURAL = "certificates"
-CERT_MANAGER_ANNOTATION = "cert-manager.io/cluster-issuer"
-CERT_MANAGER_ANNOTATION_ISSUER = "cert-manager.io/issuer"
 
 
-class LiveK8sClient(ArgoMixin, K8sClient):
+class LiveK8sClient(ArgoMixin, IngressMixin, K8sClient):
     def __init__(self, *, context: str | None = None) -> None:
         if context:
             k8s_config.load_kube_config(context=context)
@@ -133,23 +136,6 @@ class LiveK8sClient(ArgoMixin, K8sClient):
             hosts=hosts,
             cert_manager_annotation=cm_value,
         )
-
-    def strip_ingress_cert_manager_annotation(self, namespace: str, name: str) -> bool:
-        patch: dict[str, object] = {
-            "metadata": {
-                "annotations": {
-                    CERT_MANAGER_ANNOTATION: None,
-                    CERT_MANAGER_ANNOTATION_ISSUER: None,
-                }
-            }
-        }
-        try:
-            self._net.patch_namespaced_ingress(name=name, namespace=namespace, body=patch)
-            return True
-        except ApiException as exc:
-            if exc.status == 404:
-                return False
-            raise
 
     def find_certificate_for_secret(
         self, namespace: str, secret_name: str
