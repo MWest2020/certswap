@@ -60,6 +60,9 @@ class FakeK8s(K8sClient):
     def get_ingress(self, namespace: str, name: str) -> IngressView | None:
         return self.ingresses.get((namespace, name))
 
+    def list_ingresses(self, namespace: str) -> list[IngressView]:
+        return [v for (ns, _n), v in self.ingresses.items() if ns == namespace]
+
     added_hosts: list[tuple[str, str, str, str]] = field(default_factory=list)
 
     def ensure_ingress_host(
@@ -488,6 +491,26 @@ def test_ingress_host_plan_blocks_on_san_mismatch_of_new_host(pem_bundle: Path) 
     plan = driver.plan(cb, _ctx(ingress="app", ingress_host="wrong.example.org"))
     assert plan.is_blocked
     assert any("wrong.example.org" in b for b in plan.blockers)
+
+
+def test_ingress_host_plan_blocks_when_host_lives_in_another_ingress(
+    pem_bundle: Path,
+) -> None:
+    fake = FakeK8s()
+    fake.ingresses[("homelab", "app")] = _shared_ingress()
+    # A separate ingress in the same namespace already owns the new host —
+    # exactly the case that triggered the nginx admission rejection.
+    fake.ingresses[("homelab", "legacy")] = IngressView(
+        name="legacy",
+        namespace="homelab",
+        hosts=["test.certswap.example"],
+        cert_manager_annotation=None,
+    )
+    driver = K8sDriver(client_factory=lambda _c: fake)
+    cb = parse_pem(pem_bundle)
+    plan = driver.plan(cb, _ctx(ingress="app", ingress_host="test.certswap.example"))
+    assert plan.is_blocked
+    assert any("already defined in ingress homelab/legacy" in b for b in plan.blockers)
 
 
 def test_ingress_host_plan_blocks_with_keep_cert_manager(pem_bundle: Path) -> None:

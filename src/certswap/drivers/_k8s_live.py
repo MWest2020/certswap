@@ -7,6 +7,7 @@ stays import-cheap for tests that inject fakes.
 from __future__ import annotations
 
 import base64
+from typing import Any
 
 from kubernetes import client as k8s_client
 from kubernetes import config as k8s_config
@@ -118,21 +119,38 @@ class LiveK8sClient(ArgoMixin, IngressMixin, K8sClient):
             if exc.status == 404:
                 return None
             raise
+        return self._ingress_view(obj)
+
+    def list_ingresses(self, namespace: str) -> list[IngressView]:
+        try:
+            listing = self._net.list_namespaced_ingress(namespace=namespace)
+        except ApiException as exc:
+            # Only an absent namespace (404) yields "no ingresses". A 403
+            # means we cannot verify the host-conflict preflight, so fail
+            # closed (propagate) rather than silently skip the guard.
+            if exc.status == 404:
+                return []
+            raise
+        return [self._ingress_view(obj) for obj in listing.items]
+
+    @staticmethod
+    def _ingress_view(obj: Any) -> IngressView:
         hosts: list[str] = []
         for rule in obj.spec.rules or []:
-            if rule.host:
+            if rule.host and rule.host not in hosts:
                 hosts.append(rule.host)
         for tls in obj.spec.tls or []:
             for h in tls.hosts or []:
                 if h not in hosts:
                     hosts.append(h)
-        annos = (obj.metadata.annotations or {}) if obj.metadata else {}
+        meta = obj.metadata
+        annos = (meta.annotations or {}) if meta else {}
         cm_value = annos.get(CERT_MANAGER_ANNOTATION) or annos.get(
             CERT_MANAGER_ANNOTATION_ISSUER
         )
         return IngressView(
-            name=name,
-            namespace=namespace,
+            name=meta.name if meta else "",
+            namespace=meta.namespace if meta else "",
             hosts=hosts,
             cert_manager_annotation=cm_value,
         )

@@ -2,6 +2,32 @@
 
 All notable changes to certswap. Dates are ISO (YYYY-MM-DD).
 
+## [Unreleased]
+
+### Added
+- **`--ingress-host` duplicate-host preflight**: the k8s plan now lists
+  all ingresses in the namespace and blocks when the target host is
+  already defined on another ingress. nginx-ingress's admission webhook
+  rejects the same host in two ingresses (`host "..." and path "..." is
+  already defined in ingress ...`); previously this surfaced only at
+  apply / ArgoCD-sync time after the swap had started. Host-level
+  granularity; the blocker names the conflicting ingress.
+  - `K8sClient` gains `list_ingresses(namespace)`.
+  - `list_ingresses` fails closed: a `403` (no list permission) is
+    propagated rather than silently skipping the guard; only a `404`
+    (absent namespace) yields an empty list.
+
+### Changed
+- `_k8s_live` factors the `IngressView` construction shared by
+  `get_ingress` and `list_ingresses` into `_ingress_view`, which now
+  derives name/namespace from `obj.metadata` consistently with the
+  existing metadata guard (no AttributeError on the rare null-metadata
+  path) and de-duplicates rule hosts.
+
+Files: `drivers/_k8s_client.py`, `drivers/_k8s_ingress.py`,
+`drivers/_k8s_live.py`, `tests/drivers/test_k8s.py`. Tests: 119 passed,
+ruff + mypy clean.
+
 ## [0.3.0] — 2026-06-12
 
 ### Added

@@ -29,3 +29,12 @@ htmlcov/
 .env.*
 !.env.example
 *.local
+
+# TLS material — never commit certs or keys (tests generate them in tmp_path)
+*.pem
+*.key
+*.crt
+*.pfx
+*.p12
+*.p7b
+*_rsa

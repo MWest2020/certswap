@@ -36,6 +36,28 @@ def annotate_plan(
             "new TLS entry and overwrite the swapped secret"
         )
         return False
+    # nginx-ingress rejects the same host being defined in two ingresses
+    # (admission webhook: "host ... and path ... is already defined in
+    # ingress ..."). Catch that here instead of letting it surface only at
+    # apply/ArgoCD-sync time. Host-level granularity: another ingress
+    # already serving this host is the misconfiguration we guard against.
+    if opts.ingress_host:
+        conflict = next(
+            (
+                other
+                for other in client.list_ingresses(opts.namespace)
+                if other.name != ingress_name and opts.ingress_host in other.hosts
+            ),
+            None,
+        )
+        if conflict is not None:
+            plan.blockers.append(
+                f"host {opts.ingress_host} is already defined in ingress "
+                f"{opts.namespace}/{conflict.name}; nginx-ingress rejects the "
+                f"same host in two ingresses. Point --ingress at "
+                f"{conflict.name}, or remove the duplicate host first."
+            )
+            return False
     # With --ingress-host only the new host must match the bundle; the
     # other hosts on a shared ingress keep their own TLS entries.
     hosts_to_check = [opts.ingress_host] if opts.ingress_host else ingress.hosts
