@@ -35,6 +35,11 @@ uv sync --dev
 uv run ruff check . && uv run mypy src && uv run pytest
 ```
 
+Tests are in-process (a test CA/intermediate/leaf is generated per session —
+no binary fixtures in the repo). The `smoke` marker covers end-to-end CLI
+round-trips (ingest → apply → verify) across input formats; run just those
+with `uv run pytest -m smoke`.
+
 ## Commands
 
 ```sh
@@ -61,14 +66,14 @@ evidence dir under `~/.certswap/evidence/`; deployments are tracked in
 Concretely, this is one command per target for the parts of TLS-renewal
 that normally cost an afternoon and a postmortem:
 
-- Customers / CAs deliver bundles in random formats — `inspect` and
-  `ingest` normalise PFX (incl. Sectigo's RC2-40-CBC legacy MAC, via
+- Customers / CAs deliver bundles in random formats — every command
+  normalises PFX (incl. Sectigo's RC2-40-CBC legacy MAC, via
   `openssl pkcs12 -legacy` shell-out), PEM bundles, PKCS#7, archives,
   and separate-file layouts to one canonical `CertBundle`. `inspect`
   also accepts cert-only CA deliveries (no private key yet) — deployment
   commands keep requiring the key.
-- Leaf-only bundles get AIA-walked into a complete chain
-  (`--fetch-intermediates`).
+- Leaf-only bundles can be AIA-walked into a complete chain at inspect
+  time (`inspect --fetch-intermediates`).
 - Key↔cert mismatches and SAN/host mismatches are caught at `plan`,
   not at deployment.
 - On Kubernetes, `apply k8s` deletes the cert-manager Certificate that
@@ -109,11 +114,9 @@ that normally cost an afternoon and a postmortem:
 |------|----------------------------------------------------------------------|
 | 0    | Success                                                              |
 | 10   | Validation failed (plan blocked, host/key mismatch)                  |
-| 20   | Target drift                                                         |
 | 30   | Ingest failed (bad format, wrong password)                           |
-| 40   | Remote unreachable                                                   |
-| 50   | Apply failed mid-flight                                              |
-| 60   | Verify failed post-apply                                             |
+| 50   | Apply failed mid-flight (incl. remote unreachable during apply)      |
+| 60   | Verify failed post-apply (incl. target drift)                        |
 
 ## License
 

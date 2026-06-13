@@ -43,6 +43,9 @@ build-backend = "uv_build"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+markers = [
+    "smoke: end-to-end CLI round-trips exercising the whole wired-together tool (run with `-m smoke`).",
+]
 
 [tool.mypy]
 python_version = "3.12"
