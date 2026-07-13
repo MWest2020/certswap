@@ -1,0 +1,13 @@
+{
+  "role": "builder",
+  "change": "apply-docs-contract",
+  "run_id": "builder-apply-docs-contract-20260713-072015",
+  "repo": "https://github.com/MWest2020/certswap.git",
+  "verdict": "ok",
+  "subtype": "success",
+  "total_cost_usd": "0.6522145",
+  "num_turns": "21",
+  "claude_exit": "0",
+  "finished_at": "2026-07-13T07:22:23Z",
+  "diff_hash": "64370fa41a6a14395c6f94c4419ebaef12e643990c3d32fd0b4680e8bc278af7"
+}
