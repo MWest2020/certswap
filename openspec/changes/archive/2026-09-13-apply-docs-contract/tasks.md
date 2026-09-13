@@ -12,6 +12,10 @@
 - [x] 2.4 `.mcp.json` in de root plaatsen (template uit de seed; placeholder `TODO-change-3` laten staan).
 - [x] 3.1 Zelfcheck tegen het contract: alleen toegestane submappen dragen
       markdown, elke pagina heeft front matter, één taal (English).
-- [ ] 4.1 PR openen met titel `docs: apply handbook docs contract`; body vinkt
+- [x] 4.1 PR openen met titel `docs: apply handbook docs contract`; body vinkt
       per contractpunt af wat is toegepast + vermeldt de punten die de
       proposal als "PR-body" markeert. STOP daarna: Mark merget.
+      — PR #2, door Mark gemerged op 2026-07-13. `docs/index.md` +
+      `docs/reference/` staan op main, `.mcp.json` staat in de root (de
+      placeholder is in PR #3 vervangen door de echte handbook-server).
+      Alleen het archiveren was daarna blijven liggen.
