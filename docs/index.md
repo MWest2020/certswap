@@ -19,3 +19,13 @@ content review, so they are marked `status: draft`.
 
 - [Reference](reference/cli.md) — CLI commands, drivers, input formats, and exit
   codes.
+
+## De documentatie beweegt mee met de code
+
+Elke PR loopt langs `docs-gates` (`.github/workflows/docs-gates.yml`): raakt de
+PR `src/` of `tests/` zonder dat er iets onder `docs/` verandert, dan is hij
+rood. De checker leeft in de hub (MWest2020/handbook), op commit-SHA gepind,
+zodat er geen kopie per repo veroudert.
+
+Kan het echt niet, dan zet het label `docs-drift-ok` op de PR hem groen — wel
+zichtbaar, en iets waar je je voor verantwoordt.
