@@ -120,4 +120,4 @@ that normally cost an afternoon and a postmortem:
 
 ## License
 
-EUPL-1.2.
+MIT.

@@ -3,7 +3,7 @@ name = "certswap"
 version = "0.3.0"
 description = "Deterministic TLS bundle swap CLI: ingest any cert format, deploy to k8s/ssh/local/proxmox with validation, evidence, and ArgoCD-safe swaps."
 readme = "README.md"
-license = "EUPL-1.2"
+license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Mark Westerweel", email = "mark@conduction.nl" }]
 requires-python = ">=3.12"
